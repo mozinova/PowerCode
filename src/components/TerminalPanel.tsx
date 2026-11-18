@@ -8,6 +8,7 @@ import {
   newTerminal,
   setActiveTerminal,
   setDefaultTerminalProfile,
+  TERMINAL_BACKGROUND,
   useTerminals,
 } from "../terminal/sessions";
 import { DropdownMenu, type MenuEntry } from "./Menu";
@@ -77,7 +78,8 @@ export function TerminalPanel() {
   }, [active]);
 
   return (
-    <div className="flex h-full flex-col bg-panel">
+    // One surface: the tab bar takes the active terminal's background, with no border between them.
+    <div className="flex h-full flex-col" style={{ background: active?.background ?? TERMINAL_BACKGROUND }}>
       <div className="flex h-9 shrink-0 items-center gap-1 pr-2 pl-3">
         <span className="mr-2 font-semibold">Terminal</span>
         <div role="tablist" className="flex min-w-0 items-center gap-0.5 overflow-x-auto">
@@ -90,7 +92,7 @@ export function TerminalPanel() {
                 aria-selected={isActive}
                 onClick={() => setActiveTerminal(session)}
                 className={`group flex h-7 shrink-0 cursor-default items-center gap-1 rounded-md pr-1 pl-2.5 ${
-                  isActive ? "bg-selected-inactive text-fg" : "text-fg-muted hover:bg-hover"
+                  isActive ? "bg-white/8 text-fg" : "text-fg-muted hover:bg-white/5 hover:text-fg"
                 }`}
               >
                 {session.title}
@@ -103,7 +105,7 @@ export function TerminalPanel() {
                     closeTerminal(session);
                     if (useTerminals.getState().sessions.length === 0) toggleBottomTool("terminal");
                   }}
-                  className={`flex size-[18px] items-center justify-center rounded hover:bg-hover ${
+                  className={`flex size-[18px] items-center justify-center rounded hover:bg-white/10 ${
                     isActive ? "visible" : "invisible group-hover:visible"
                   }`}
                 >
@@ -117,7 +119,7 @@ export function TerminalPanel() {
         <div className="flex-1" />
         <IconButton icon={Minus} title="Hide" onClick={() => toggleBottomTool("terminal")} className="size-7" />
       </div>
-      <div ref={containerRef} className="min-h-0 flex-1 bg-editor" onClick={() => active?.focus()} />
+      <div ref={containerRef} className="min-h-0 flex-1" onClick={() => active?.focus()} />
     </div>
   );
 }

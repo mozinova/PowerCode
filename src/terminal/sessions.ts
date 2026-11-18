@@ -36,6 +36,8 @@ let nextKey = 1;
 export class TerminalSession {
   readonly key = nextKey++;
   readonly title: string;
+  /** Background of this terminal, which the tab bar takes so they read as one surface. */
+  readonly background = THEME.background!;
   private readonly host = document.createElement("div");
   private readonly term = new Terminal({
     theme: THEME,
@@ -192,3 +194,6 @@ export function closeAllTerminals() {
   useTerminals.getState().sessions.forEach((s) => s.dispose());
   useTerminals.setState({ sessions: [], active: null });
 }
+
+/** The terminal background, for chrome shown before any session exists. */
+export const TERMINAL_BACKGROUND = THEME.background!;
