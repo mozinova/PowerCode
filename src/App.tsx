@@ -12,6 +12,8 @@ import { RemoteView } from "./components/RemoteView";
 import { BottomToolButtons, ToolStripe } from "./components/ToolStripes";
 import { SearchView, focusFindInFiles } from "./components/SearchView";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { DebugConsole } from "./components/DebugConsole";
+import { DebugView } from "./components/DebugView";
 import { ExtensionViewContainer } from "./components/ExtensionViews";
 import { HostDialogs } from "./components/HostDialogs";
 import { OutputPanel } from "./components/OutputPanel";
@@ -21,6 +23,8 @@ import { WebviewLayer } from "./components/WebviewFrame";
 import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
 import { startExtensionHost } from "./exthost/host";
+import { startDebugging } from "./debug/launch";
+import { debugPause, debugRestart, debugStepInto, debugStepOut, debugStepOver, debugStop, toggleBreakpointAtCursor, useDebug } from "./debug/model";
 import { startGitWatcher } from "./git/store";
 import type { ToolId } from "./state/workspace";
 import { useWorkspace } from "./state/workspace";
@@ -33,11 +37,30 @@ const TOOL_WINDOWS: Partial<Record<ToolId, ReactNode>> = {
   search: <SearchView />,
   remote: <RemoteView />,
   extensions: <ExtensionsView />,
+  debug: <DebugView />,
 };
 
 /** The content of a tool window, in whichever sidebar it is. */
 function toolWindow(tool: ToolId): ReactNode {
   return TOOL_WINDOWS[tool] ?? <ExtensionViewContainer key={tool} tool={tool} />;
+}
+
+/** Debugger keys, as in VS Code: F5 start/continue, F10/F11 step, F9 breakpoint, ... */
+function debugShortcut(e: KeyboardEvent): boolean {
+  const ctrl = e.ctrlKey || e.metaKey;
+  const running = useDebug.getState().sessions.length > 0;
+  if (e.key === "F5" && ctrl && e.shiftKey) void debugRestart();
+  else if (e.key === "F5" && e.shiftKey) void debugStop();
+  else if (e.key === "F5" && ctrl) void startDebugging(true);
+  else if (e.key === "F5") void startDebugging();
+  else if (e.key === "F9" && !ctrl && !e.shiftKey) toggleBreakpointAtCursor();
+  else if (!running) return false;
+  else if (e.key === "F6") void debugPause();
+  else if (e.key === "F10") void debugStepOver();
+  else if (e.key === "F11" && e.shiftKey) void debugStepOut();
+  else if (e.key === "F11") void debugStepInto();
+  else return false;
+  return true;
 }
 
 /** IDE-wide shortcuts, handled in the capture phase so Monaco does not swallow them. */
@@ -59,6 +82,11 @@ function useGlobalShortcuts() {
       else if (e.altKey && !ctrl && e.code === "Digit1") toggleTool("project");
       else if (e.altKey && !ctrl && e.code === "Digit2") toggleTool("extensions");
       else if (e.altKey && !ctrl && e.key === "F12") toggleBottomTool("terminal");
+      else if (ctrl && e.shiftKey && e.key.toLowerCase() === "d") toggleTool("debug");
+      else if (ctrl && e.shiftKey && e.key.toLowerCase() === "y") toggleBottomTool("debug");
+      else if (debugShortcut(e)) {
+        // Handled.
+      }
       else handled = false;
       if (handled) {
         e.preventDefault();
@@ -145,7 +173,9 @@ export default function App() {
             <>
               <Separator className="island-gap" />
               <Panel id="bottom" defaultSize={260} minSize={100}>
-                <div className="island">{bottomTool === "output" ? <OutputPanel /> : <TerminalPanel />}</div>
+                <div className="island">
+                  {bottomTool === "output" ? <OutputPanel /> : bottomTool === "debug" ? <DebugConsole /> : <TerminalPanel />}
+                </div>
               </Panel>
             </>
           )}

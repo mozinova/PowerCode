@@ -24,6 +24,10 @@ import * as rpc from "./rpc";
 import { ensureUserSettingsFile, readUserSettings, updateUserSetting, userSettingsPath } from "./settings";
 import { appendOutput, log, useExtensionHost, type ContributedCommand, type StatusItem } from "./state";
 import { contributions, registerViewHandlers, resetViews, setConfigurationContext } from "./views";
+import { registerCustomEditorHandlers, resetCustomEditors } from "./customEditors";
+import { syncToHost as syncBreakpointsToHost } from "../debug/breakpoints";
+import { registerDebugHover } from "../debug/editor";
+import { registerDebugHandlers, resetDebug } from "../debug/model";
 import {
   disposeAllWebviews,
   disposeWebview,
@@ -90,6 +94,8 @@ function forgetHostState() {
   terminals.clear();
   useExtensionHost.setState({ statusItems: [], statusMessage: "", commands: [] });
   resetViews();
+  resetCustomEditors();
+  resetDebug();
   resetContextKeys();
   // Webview panels belong to the host that created them.
   panels.clear();
@@ -138,6 +144,7 @@ async function start(key: string, extensions: InstalledExtension[], root: string
       useExtensionHost.setState({ commands: result.commands, status: "running" });
       for (const model of monaco.editor.getModels()) openDocument(model);
       sendActiveEditor();
+      syncBreakpointsToHost();
       rpc.notify("start");
     });
   } catch (e) {
@@ -463,6 +470,8 @@ function registerWebviewHandlers() {
 
 function registerHandlers() {
   registerWebviewHandlers();
+  registerDebugHandlers();
+  registerCustomEditorHandlers();
   registerViewHandlers(showView, (id) => disposeWebview(id));
   rpc.onNotification("log", ({ level, message }) => log(level, message));
   rpc.onNotification("ready", ({ node }) => log("info", `Extension host ready (Node ${node})`));
@@ -627,6 +636,7 @@ export function startExtensionHost() {
   if (initialized) return;
   initialized = true;
   registerHandlers();
+  registerDebugHover();
   listenToWebviews();
   setDocumentFlusher((uri) => syncedDocuments.get(uri)?.flush());
 

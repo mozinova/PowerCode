@@ -18,7 +18,6 @@ import { commit, initRepository, openDiff, rollback, stage, unstage } from "../g
 import { GIT_COLORS, GIT_LETTERS, fileState, refreshGit, useGit } from "../git/store";
 import type { GitFile } from "../lib/ipc";
 import { basename, isWithin, parentDir } from "../lib/paths";
-import { remoteOf } from "../lib/remote";
 import { useWorkspace } from "../state/workspace";
 import { FileIcon } from "./FileIcon";
 import { GitGraphSection } from "./GitGraph";
@@ -203,10 +202,6 @@ export function CommitView() {
 
       {!root ? (
         <p className="px-3 text-fg-muted">No folder is open.</p>
-      ) : remoteOf(root)?.kind === "ssh" ? (
-        <p className="px-3 text-fg-muted">
-          Git for SSH workspaces is not available yet. Use the terminal (it runs on the host) in the meantime.
-        </p>
       ) : !status?.isRepo ? (
         <NotARepository />
       ) : (

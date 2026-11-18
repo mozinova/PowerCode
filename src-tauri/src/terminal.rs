@@ -1,5 +1,5 @@
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -30,6 +30,32 @@ pub enum TerminalEvent {
 
 /// The shell for a terminal opened in `cwd`: on the SSH host or in the WSL
 /// distribution for remote workspaces, otherwise the local shell.
+/// A program to run in the terminal instead of a shell (a debugger's `runInTerminal`).
+#[derive(Deserialize)]
+pub struct Program {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    /// Variables to set; `null` removes one, as in the Debug Adapter Protocol.
+    #[serde(default)]
+    env: HashMap<String, Option<String>>,
+}
+
+fn program_command(cwd: Option<&str>, program: &Program) -> CommandBuilder {
+    let mut cmd = CommandBuilder::new(&program.command);
+    cmd.args(&program.args);
+    if let Some(dir) = cwd {
+        cmd.cwd(dir);
+    }
+    for (key, value) in &program.env {
+        match value {
+            Some(value) => cmd.env(key, value),
+            None => cmd.env_remove(key),
+        }
+    }
+    cmd
+}
+
 fn shell_command(cwd: Option<&str>, profile: Option<&str>) -> CommandBuilder {
     if let Some((host, dir)) = cwd.and_then(crate::remote::parse) {
         let mut cmd = CommandBuilder::new("ssh");
@@ -86,6 +112,7 @@ pub fn terminal_spawn(
     profile: Option<String>,
     cols: u16,
     rows: u16,
+    program: Option<Program>,
     on_event: Channel<TerminalEvent>,
 ) -> CmdResult<u32> {
     let pair = native_pty_system()
@@ -97,7 +124,10 @@ pub fn terminal_spawn(
         })
         .map_err(err)?;
 
-    let mut cmd = shell_command(cwd.as_deref(), profile.as_deref());
+    let mut cmd = match &program {
+        Some(program) => program_command(cwd.as_deref(), program),
+        None => shell_command(cwd.as_deref(), profile.as_deref()),
+    };
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
 

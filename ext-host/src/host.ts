@@ -11,6 +11,7 @@ import { matchesGlob } from "./glob";
 import * as providers from "./providers";
 import * as rpc from "./rpc";
 import * as views from "./views";
+import * as debug from "./debug";
 import { collectDefaults, host, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import { EventEmitter, ExtensionMode, Range, Uri } from "./types";
 
@@ -141,6 +142,12 @@ function activationEvents(extension: ExtensionDescription): string[] {
   const events = new Set<string>(extension.manifest.activationEvents ?? []);
   for (const command of extension.manifest.contributes?.commands ?? []) events.add(`onCommand:${command.command}`);
   for (const language of extension.manifest.contributes?.languages ?? []) events.add(`onLanguage:${language.id}`);
+  for (const d of extension.manifest.contributes?.debuggers ?? []) {
+    if (d?.type) events.add(`onDebugResolve:${d.type}`);
+  }
+  for (const editor of extension.manifest.contributes?.customEditors ?? []) {
+    if (editor?.viewType) events.add(`onCustomEditor:${editor.viewType}`);
+  }
   for (const container of Object.values<any[]>(extension.manifest.contributes?.views ?? {})) {
     for (const view of container ?? []) if (view?.id) events.add(`onView:${view.id}`);
   }
@@ -237,6 +244,7 @@ function containsMatch(dir: string, globs: string[], depth: number): boolean {
 }
 
 setCommandActivator(async (command) => activateByEvent(`onCommand:${command}`));
+debug.setDebugActivator(activateByEvent);
 
 // ---- Messages from the UI ---------------------------------------------------
 
@@ -348,6 +356,7 @@ rpc.onRequest("shutdown", async () => {
 
 providers.listen();
 views.listen();
+debug.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

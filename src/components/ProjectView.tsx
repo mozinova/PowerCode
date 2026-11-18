@@ -24,7 +24,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
-import { createEntry, deleteEntry, openFolder, openTerminalAt, renameEntry } from "../actions";
+import { createEntry, deleteEntry, openEditor, openFolder, openTerminalAt, renameEntry } from "../actions";
 import { errorMessage, fsApi, type DirEntry } from "../lib/ipc";
 import { basename, isWithin, joinPath, movedPath, parentDir } from "../lib/paths";
 import { REVEAL_LABEL } from "../lib/platform";
@@ -253,7 +253,6 @@ function Tree({ root }: { root: string }) {
     seenFsVersion.current = fsVersion;
     refreshRef.current();
   }, [fsVersion]);
-  const openFile = useWorkspace((s) => s.openFile);
   const toggleTool = useWorkspace((s) => s.toggleTool);
   const [selected, setSelected] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
@@ -294,7 +293,7 @@ function Tree({ root }: { root: string }) {
 
   const activate = (row: Row) => {
     if (row.entry.isDir) toggle(row.entry.path);
-    else openFile(row.entry.path);
+    else openEditor(row.entry.path);
   };
 
   const scrollIntoView = (index: number) => {
@@ -480,7 +479,7 @@ function Tree({ root }: { root: string }) {
                   setSelected(row.entry.path);
                   if (row.entry.isDir) toggle(row.entry.path);
                 }}
-                onDoubleClick={() => !row.entry.isDir && openFile(row.entry.path)}
+                onDoubleClick={() => !row.entry.isDir && openEditor(row.entry.path)}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();

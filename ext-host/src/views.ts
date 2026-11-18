@@ -3,7 +3,7 @@
 //! and asks for tree children; webview HTML and messages travel as notifications.
 
 import * as path from "node:path";
-import { executeCommand } from "./api";
+import { executeCommand, openTextDocument } from "./api";
 import * as rpc from "./rpc";
 import { host } from "./state";
 import { CancellationTokenSource, Disposable, EventEmitter, MarkdownString, ThemeColor, ThemeIcon, Uri } from "./types";
@@ -275,12 +275,17 @@ function createWebview(id: string, extensionId: string, initialOptions: any) {
 
 export function createWebviewPanel(extensionId: string, viewType: string, title: string, showOptions: any, options: any = {}) {
   const id = `panel-${nextWebview++}`;
+  const preserveFocus = typeof showOptions === "object" && showOptions?.preserveFocus === true;
+  rpc.notify("webview/createPanel", { id, viewType, title, extension: extensionId, preserveFocus });
+  return makePanel(id, extensionId, viewType, title, options);
+}
+
+/** A `WebviewPanel` whose tab the UI already shows (`createWebviewPanel`) or owns (custom editors). */
+function makePanel(id: string, extensionId: string, viewType: string, title: string, options: any = {}) {
   const { webview, onDidReceiveMessage } = createWebview(id, extensionId, options);
   const onDidDispose = new EventEmitter<void>();
   const onDidChangeViewState = new EventEmitter<any>();
   const state = { active: true, visible: true, title, iconPath: undefined as unknown, disposed: false };
-  const preserveFocus = typeof showOptions === "object" && showOptions?.preserveFocus === true;
-  rpc.notify("webview/createPanel", { id, viewType, title, extension: extensionId, preserveFocus });
   const panel = {
     viewType,
     webview,
@@ -321,6 +326,71 @@ export function createWebviewPanel(extensionId: string, viewType: string, title:
   };
   webviews.set(id, { onDidReceiveMessage, onDidDispose, onDidChangeViewState, owner: panel, state });
   return panel;
+}
+
+// ---- Custom editors -------------------------------------------------------------------
+
+const customEditorProviders = new Map<string, { provider: any; extensionId: string; options: any }>();
+/** Documents of `CustomEditorProvider`s, shared by the editors showing them. */
+const customDocuments = new Map<string, { document: any; panels: Set<string> }>();
+/** The custom document each custom editor shows, by webview id. */
+const customEditorDocuments = new Map<string, string>();
+
+export function registerCustomEditorProvider(extensionId: string, viewType: string, provider: any, options?: any) {
+  customEditorProviders.set(viewType, { provider, extensionId, options: options ?? {} });
+  rpc.notify("customEditors/register", { viewType });
+  // Edits of a custom document make its editors dirty; the UI saves through `customEditors/save`.
+  const subscription = provider.onDidChangeCustomDocument?.((e: { document: { uri: Uri } }) => {
+    rpc.notify("customEditors/dirty", { uri: e.document.uri.toString(), dirty: true });
+  });
+  return new Disposable(() => {
+    subscription?.dispose?.();
+    customEditorProviders.delete(viewType);
+    rpc.notify("customEditors/unregister", { viewType });
+  });
+}
+
+/** Creates the webview of a custom editor tab and lets the provider fill it; returns its id. */
+async function resolveCustomEditor(params: { viewType: string; uri: string; title: string }) {
+  const registered = customEditorProviders.get(params.viewType);
+  if (!registered) return null;
+  const { provider, extensionId, options } = registered;
+  const id = `custom-${nextWebview++}`;
+  const panel = makePanel(id, extensionId, params.viewType, params.title, options.webviewOptions ?? {});
+  const uri = Uri.parse(params.uri);
+  const token = new CancellationTokenSource().token;
+  if (typeof provider.resolveCustomTextEditor === "function") {
+    const document = await openTextDocument(uri);
+    await provider.resolveCustomTextEditor(document, panel, token);
+    return { id, kind: "text" };
+  }
+  let entry = customDocuments.get(params.uri);
+  if (!entry) {
+    const document = await provider.openCustomDocument(uri, { backupId: undefined, untitledDocumentData: undefined }, token);
+    entry = { document, panels: new Set() };
+    customDocuments.set(params.uri, entry);
+  }
+  entry.panels.add(id);
+  customEditorDocuments.set(id, params.uri);
+  panel.onDidDispose(() => {
+    customEditorDocuments.delete(id);
+    entry!.panels.delete(id);
+    if (entry!.panels.size === 0) {
+      customDocuments.delete(params.uri);
+      entry!.document.dispose?.();
+    }
+  });
+  await provider.resolveCustomEditor(entry.document, panel, token);
+  return { id, kind: typeof provider.saveCustomDocument === "function" ? "editable" : "readonly" };
+}
+
+async function saveCustomEditor(params: { viewType: string; uri: string }) {
+  const provider = customEditorProviders.get(params.viewType)?.provider;
+  const entry = customDocuments.get(params.uri);
+  if (!provider?.saveCustomDocument || !entry) return false;
+  await provider.saveCustomDocument(entry.document, new CancellationTokenSource().token);
+  rpc.notify("customEditors/dirty", { uri: params.uri, dirty: false });
+  return true;
 }
 
 const webviewViewProviders = new Map<string, { provider: any; extensionId: string }>();
@@ -417,6 +487,8 @@ export function listen() {
     tree.onDidChangeVisibility.fire({ visible: params.visible });
   });
   rpc.onRequest("views/resolveWebview", resolveWebviewView);
+  rpc.onRequest("customEditors/resolve", resolveCustomEditor);
+  rpc.onRequest("customEditors/save", saveCustomEditor);
 
   rpc.onNotification("webview/message", (params: { id: string; message: unknown }) => {
     webviews.get(params.id)?.onDidReceiveMessage.fire(params.message);

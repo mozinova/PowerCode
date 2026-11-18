@@ -175,12 +175,38 @@ impl Drop for Session {
     }
 }
 
-#[derive(Default)]
+/// The SSH sessions, one per host. Clones share them (see `shared`).
+#[derive(Default, Clone)]
 pub struct Remotes {
-    sessions: Mutex<HashMap<String, Arc<Mutex<Session>>>>,
+    sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Session>>>>>,
+}
+
+/// The app's sessions, for code that runs outside a Tauri command (e.g. git).
+pub fn shared() -> Remotes {
+    static SHARED: std::sync::OnceLock<Remotes> = std::sync::OnceLock::new();
+    SHARED.get_or_init(Remotes::default).clone()
 }
 
 impl Remotes {
+    /// Runs `script` on `host`, blocking; for callers already off the async runtime.
+    pub fn exec_blocking(&self, host: &str, script: &str) -> CmdResult<Vec<u8>> {
+        let session = self.session_blocking(host)?;
+        let mut session = session.lock().map_err(err)?;
+        session.exec(script)
+    }
+
+    fn session_blocking(&self, host: &str) -> CmdResult<Arc<Mutex<Session>>> {
+        let existing = self.sessions.lock().map_err(err)?.get(host).cloned();
+        if let Some(session) = existing {
+            if session.lock().map(|mut s| s.alive()).unwrap_or(false) {
+                return Ok(session);
+            }
+        }
+        let session = Arc::new(Mutex::new(Session::connect(host)?));
+        self.sessions.lock().map_err(err)?.insert(host.to_string(), session.clone());
+        Ok(session)
+    }
+
     /// Runs `script` on `host` off the async runtime, connecting (or reconnecting) as needed.
     pub async fn exec(remotes: &Remotes, host: &str, script: String) -> CmdResult<Vec<u8>> {
         let session = remotes.session_async(host).await?;
@@ -504,5 +530,35 @@ mod protocol_tests {
         assert_eq!(entries, vec!["d/.hidden", "d/sub", "f/it's a file.txt"]);
 
         session.exec(&format!("rm -rf -- {}", quote(&dir))).unwrap();
+    }
+
+    #[test]
+    fn runs_git_through_the_session() {
+        let Some(mut session) = local_session() else { return };
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("powercode-ssh-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let posix = dir.to_string_lossy().replace('\\', "/");
+        let git = |session: &mut Session, args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            session.exec(&crate::git::ssh_git_script(&posix, &args))
+        };
+
+        git(&mut session, &["init", "-q"]).unwrap();
+        std::fs::write(dir.join("ünïcode file.txt"), "x").unwrap();
+        // Only git's stdout comes back: `status` output, with the path unquoted.
+        let status = String::from_utf8(git(&mut session, &["status", "--porcelain=v2", "-z"]).unwrap()).unwrap();
+        assert_eq!(status, "? ünïcode file.txt ");
+        // A failing command reports git's stderr, and the shared shell survives its `exit`.
+        let error = git(&mut session, &["rev-parse", "--verify", "no-such-ref"]).unwrap_err();
+        assert!(error.contains("no-such-ref") || error.contains("fatal"), "{error}");
+        assert!(session.alive());
+        let top = String::from_utf8(git(&mut session, &["rev-parse", "--show-toplevel"]).unwrap()).unwrap();
+        assert!(!top.trim().is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

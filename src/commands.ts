@@ -2,13 +2,17 @@
 
 import { ask } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, saveActive } from "./actions";
+import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, reopenWith, saveActive } from "./actions";
 import { focusFindInFiles } from "./components/SearchView";
 import { saveModel } from "./editor/models";
 import { fetchAll, initRepository, pull, pushBranch } from "./git/actions";
 import { useGit } from "./git/store";
 import { remoteOf } from "./lib/remote";
-import { parseDiffTab } from "./lib/virtualTabs";
+import { parseDiffTab, tabFilePath } from "./lib/virtualTabs";
+import { customEditorsFor } from "./exthost/customEditors";
+import { removeBreakpoints, useBreakpoints } from "./debug/breakpoints";
+import { openLaunchJson, startDebugging } from "./debug/launch";
+import { debugRestart, debugStop, toggleBreakpointAtCursor, useDebug } from "./debug/model";
 import { notify } from "./state/notifications";
 import { setAutoSave, setAutoUpdateExtensions, useSettings } from "./state/settings";
 import { checkForUpdates, useExtensions } from "./extensions/runtime";
@@ -32,6 +36,7 @@ const hasFolder = () => useWorkspace.getState().root !== null;
 const hasTabs = () => useWorkspace.getState().tabs.length > 0;
 const inRepo = () => useGit.getState().status?.isRepo === true;
 const isRemote = () => remoteOf(useWorkspace.getState().root) !== null;
+const isDebugging = () => useDebug.getState().sessions.length > 0;
 
 /** Reloads the whole UI, after confirming if that would lose unsaved changes. */
 async function reloadWindow() {
@@ -115,7 +120,7 @@ export const COMMANDS: Command[] = [
     id: "git.init",
     category: "Git",
     label: "Initialize Repository",
-    when: () => hasFolder() && !inRepo() && !isRemote(),
+    when: () => hasFolder() && !inRepo(),
     run: initRepository,
   },
   { id: "remote.close", category: "Remote", label: "Close Remote Connection", when: isRemote, run: closeRemoteConnection },
@@ -146,6 +151,29 @@ export const COMMANDS: Command[] = [
     run: restartExtensionHost,
   },
   { id: "view.output", category: "View", label: "Show Output", run: () => showOutput() },
+  { id: "debug.start", category: "Debug", label: "Start Debugging", shortcut: "F5", when: hasFolder, run: () => startDebugging() },
+  { id: "debug.run", category: "Debug", label: "Run Without Debugging", shortcut: "Ctrl+F5", when: hasFolder, run: () => startDebugging(true) },
+  { id: "debug.stop", category: "Debug", label: "Stop", shortcut: "Shift+F5", when: isDebugging, run: () => void debugStop() },
+  { id: "debug.restart", category: "Debug", label: "Restart", shortcut: "Ctrl+Shift+F5", when: isDebugging, run: () => debugRestart() },
+  { id: "debug.toggleBreakpoint", category: "Debug", label: "Toggle Breakpoint", shortcut: "F9", when: hasTabs, run: toggleBreakpointAtCursor },
+  { id: "debug.removeBreakpoints", category: "Debug", label: "Remove All Breakpoints", run: () => removeBreakpoints(useBreakpoints.getState().list.map((b) => b.id)) },
+  { id: "debug.openLaunchJson", category: "Debug", label: "Open launch.json", when: hasFolder, run: openLaunchJson },
+  { id: "view.debug", category: "View", label: "Show Run and Debug", shortcut: "Ctrl+Shift+D", run: () => showTool("debug") },
+  { id: "view.debugConsole", category: "View", label: "Show Debug Console", shortcut: "Ctrl+Shift+Y", run: () => useWorkspace.getState().toggleBottomTool("debug") },
+  {
+    id: "view.reopenWith",
+    category: "View",
+    label: "Reopen Editor With…",
+    when: () => {
+      const active = useWorkspace.getState().activePath;
+      const file = active ? tabFilePath(active) : null;
+      return file !== null && customEditorsFor(file).length > 0;
+    },
+    run: () => {
+      const active = useWorkspace.getState().activePath;
+      if (active) return reopenWith(active);
+    },
+  },
   { id: "preferences.theme", category: "Preferences", label: "Color Theme / File Icon Theme", run: () => showTool("extensions") },
   { id: "preferences.settingsJson", category: "Preferences", label: "Open User Settings (JSON)", run: openUserSettings },
   { id: "window.maximize", category: "Window", label: "Toggle Maximize", run: () => getCurrentWindow().toggleMaximize() },

@@ -21,8 +21,15 @@ let running = false;
 /** The current host's message channel; messages from earlier hosts are ignored. */
 let current: Channel<string> | null = null;
 
+/**
+ * Messages go out one at a time: separate `invoke`s may otherwise reach the host
+ * out of order (e.g. a provider request before the edit it depends on).
+ */
+let sending: Promise<unknown> = Promise.resolve();
+
 function send(message: Message) {
-  void invoke("exthost_send", { message: JSON.stringify(message) }).catch(() => {});
+  const line = JSON.stringify(message);
+  sending = sending.then(() => invoke("exthost_send", { message: line }).catch(() => {}));
 }
 
 export function onRequest(method: string, handler: Handler) {

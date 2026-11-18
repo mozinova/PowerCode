@@ -1,7 +1,7 @@
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { create } from "zustand";
-import { terminalApi, type TerminalProfile } from "../lib/ipc";
+import { terminalApi, type TerminalProfile, type TerminalProgram } from "../lib/ipc";
 import { remoteLabel, remoteOf } from "../lib/remote";
 
 const THEME: ITheme = {
@@ -58,6 +58,8 @@ export class TerminalSession {
     /** Terminal profile id; null for the default shell. */
     private readonly profile: string | null,
     title: string,
+    /** A program to run instead of a shell. */
+    private readonly program?: TerminalProgram,
   ) {
     this.title = title;
     this.host.style.height = "100%";
@@ -106,7 +108,7 @@ export class TerminalSession {
           this.ptyId = null;
           this.term.write("\r\n\x1b[90m[Process exited]\x1b[0m\r\n");
         }
-      });
+      }, this.program);
     } catch (e) {
       this.term.write(`\x1b[31mCould not start the terminal: ${e}\x1b[0m\r\n`);
       return;
@@ -209,3 +211,11 @@ export function closeAllTerminals() {
 
 /** The terminal background, for chrome shown before any session exists. */
 export const TERMINAL_BACKGROUND = THEME.background!;
+
+/** Opens a terminal running `program` (not a shell), e.g. for a debugger's `runInTerminal`. */
+export function newProgramTerminal(cwd: string | null, title: string, program: TerminalProgram) {
+  const session = new TerminalSession(cwd, null, title, program);
+  const { sessions } = useTerminals.getState();
+  useTerminals.setState({ sessions: [...sessions, session], active: session });
+  return session;
+}

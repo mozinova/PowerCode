@@ -3,7 +3,9 @@ import { disposeAllModels, disposeModel, moveModel, saveModel } from "./editor/m
 import { errorMessage, fsApi, remoteApi } from "./lib/ipc";
 import { basename, isWithin, movedPath } from "./lib/paths";
 import { remoteLabel, remoteOf } from "./lib/remote";
-import { extensionTabPath, parseDiffTab } from "./lib/virtualTabs";
+import { customEditorTabPath, extensionTabPath, parseCustomEditorTab, parseDiffTab, tabFilePath } from "./lib/virtualTabs";
+import { customEditorsFor, defaultTabFor, saveCustomEditorTab } from "./exthost/customEditors";
+import { showQuickPick } from "./exthost/dialogs";
 import { refreshGit } from "./git/store";
 import { saveIfDirty } from "./editor/autosave";
 import { pickRemoteFolder } from "./state/folderPicker";
@@ -105,7 +107,8 @@ export async function saveActive() {
   // A diff tab saves the file it compares (when it is open with edits).
   const path = parseDiffTab(active) ?? active;
   try {
-    await saveModel(path);
+    if (parseCustomEditorTab(active)) await saveCustomEditorTab(active);
+    else await saveModel(path);
     void refreshGit();
   } catch (e) {
     await message(`Could not save the file:\n${errorMessage(e)}`, {
@@ -220,4 +223,36 @@ export function openTerminalAt(dir: string) {
 
 export function openExtensionPage(namespace: string, name: string, title: string, icon?: string) {
   useWorkspace.getState().openFile(extensionTabPath(namespace, name), title, icon);
+}
+
+/** Opens a file in its default editor: an extension's custom editor if one claims it, else the text editor. */
+export function openEditor(path: string) {
+  useWorkspace.getState().openFile(defaultTabFor(path), basename(path));
+}
+
+/** Asks which editor to show a tab's file in (text or a custom editor) and swaps the tab for it. */
+export async function reopenWith(tabPath: string, group?: number) {
+  const file = tabFilePath(tabPath);
+  if (!file) return;
+  const current = parseCustomEditorTab(tabPath)?.viewType;
+  const choices = [
+    { label: "Text Editor", description: current ? undefined : "Active", tab: file },
+    ...customEditorsFor(file).map((e) => ({
+      label: e.displayName,
+      description: e.viewType === current ? "Active" : e.priority === "default" ? "Default" : undefined,
+      tab: customEditorTabPath(e.viewType, file),
+    })),
+  ];
+  const picked = await showQuickPick({
+    title: `Reopen "${basename(file)}" With`,
+    placeHolder: "Select an editor",
+    items: choices.map(({ label, description }) => ({ label, description })),
+    canPickMany: false,
+  });
+  const target = picked?.[0] !== undefined ? choices[picked[0]].tab : null;
+  if (!target || target === tabPath) return;
+  const workspace = useWorkspace.getState();
+  if (group !== undefined) workspace.focusGroup(group);
+  workspace.openFile(target, basename(file));
+  workspace.closeTab(tabPath, group);
 }

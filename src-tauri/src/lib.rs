@@ -17,7 +17,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(terminal::Terminals::default())
         .manage(search::Searches::default())
-        .manage(remote::Remotes::default())
+        .manage(remote::shared())
         .manage(exthost::ExtensionHost::default())
         .manage(webview::Webviews::default())
         .register_asynchronous_uri_scheme_protocol(webview::SCHEME, webview::handle)

@@ -28,18 +28,29 @@ export interface TerminalProfile {
   name: string;
 }
 
+export interface TerminalProgram {
+  command: string;
+  args: string[];
+  /** `null` removes a variable. */
+  env: Record<string, string | null>;
+}
+
 export const terminalApi = {
-  /** `profile` null uses the default shell; remote workspaces always use the remote shell. */
+  /**
+   * `profile` null uses the default shell; remote workspaces always use the remote shell.
+   * With `program`, that program runs instead of a shell (e.g. a debugger's `runInTerminal`).
+   */
   spawn: (
     cwd: string | null,
     profile: string | null,
     cols: number,
     rows: number,
     onEvent: (e: TerminalEvent) => void,
+    program?: TerminalProgram,
   ) => {
     const channel = new Channel<TerminalEvent>();
     channel.onmessage = onEvent;
-    return invoke<number>("terminal_spawn", { cwd, profile, cols, rows, onEvent: channel });
+    return invoke<number>("terminal_spawn", { cwd, profile, cols, rows, program: program ?? null, onEvent: channel });
   },
   profiles: () => invoke<TerminalProfile[]>("terminal_profiles"),
   write: (id: number, data: string) => invoke<void>("terminal_write", { id, data }),

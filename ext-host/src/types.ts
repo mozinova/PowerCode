@@ -161,10 +161,14 @@ export class Selection extends Range {
 }
 
 export class Location {
+  readonly range: Range;
+  /** A position stands for an empty range there, as in VS Code. */
   constructor(
     readonly uri: Uri,
-    readonly range: Range,
-  ) {}
+    rangeOrPosition: Range | Position,
+  ) {
+    this.range = rangeOrPosition instanceof Position ? new Range(rangeOrPosition, rangeOrPosition) : rangeOrPosition;
+  }
 }
 
 export enum DiagnosticSeverity {
@@ -823,4 +827,77 @@ export class NotebookEdit {
     public range: NotebookRange,
     public newCells: NotebookCellData[],
   ) {}
+}
+
+// ---- Debugging ----
+
+export class DebugAdapterExecutable {
+  constructor(
+    readonly command: string,
+    readonly args: string[] = [],
+    readonly options?: { env?: Record<string, string>; cwd?: string },
+  ) {}
+}
+
+export class DebugAdapterServer {
+  constructor(
+    readonly port: number,
+    readonly host?: string,
+  ) {}
+}
+
+export class DebugAdapterNamedPipeServer {
+  constructor(readonly path: string) {}
+}
+
+export class DebugAdapterInlineImplementation {
+  constructor(readonly implementation: { handleMessage(message: unknown): void; onDidSendMessage(listener: (message: unknown) => void): { dispose(): unknown }; dispose?(): void }) {}
+}
+
+let nextBreakpointId = 1;
+
+export class Breakpoint {
+  readonly id: string;
+  constructor(
+    readonly enabled = true,
+    readonly condition?: string,
+    readonly hitCondition?: string,
+    readonly logMessage?: string,
+  ) {
+    this.id = `bp-${nextBreakpointId++}`;
+  }
+}
+
+export class SourceBreakpoint extends Breakpoint {
+  constructor(
+    readonly location: Location,
+    enabled?: boolean,
+    condition?: string,
+    hitCondition?: string,
+    logMessage?: string,
+  ) {
+    super(enabled, condition, hitCondition, logMessage);
+  }
+}
+
+export class FunctionBreakpoint extends Breakpoint {
+  constructor(
+    readonly functionName: string,
+    enabled?: boolean,
+    condition?: string,
+    hitCondition?: string,
+    logMessage?: string,
+  ) {
+    super(enabled, condition, hitCondition, logMessage);
+  }
+}
+
+export enum DebugConsoleMode {
+  Separate = 0,
+  MergeWithParent = 1,
+}
+
+export enum DebugConfigurationProviderTriggerKind {
+  Initial = 1,
+  Dynamic = 2,
 }

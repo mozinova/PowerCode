@@ -1,4 +1,4 @@
-import { Blocks, Folder, GitCommitHorizontal, ScrollText, Search, Server, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Blocks, Bug, Folder, GitCommitHorizontal, ScrollText, Search, Server, SquareChevronRight, SquareTerminal, type LucideIcon } from "lucide-react";
 import { useRef, type ReactNode } from "react";
 import { create } from "zustand";
 import { useViews } from "../exthost/views";
@@ -31,6 +31,7 @@ function useToolEntries(): ToolEntry[] {
     { id: "project", title: "Project", shortcut: "Alt+1", icon: lucide(Folder), badge: 0 },
     { id: "commit", title: "Commit", shortcut: "Alt+0", icon: lucide(GitCommitHorizontal), badge: changeCount },
     { id: "search", title: "Find in Files", shortcut: "Ctrl+Shift+F", icon: lucide(Search), badge: 0 },
+    { id: "debug", title: "Run and Debug", shortcut: "Ctrl+Shift+D", icon: lucide(Bug), badge: 0 },
     { id: "remote", title: "Remote Hosts", icon: lucide(Server), badge: 0 },
     { id: "extensions", title: "Extensions", shortcut: "Alt+2", icon: lucide(Blocks), badge: 0 },
     ...containers.map((c) => ({
@@ -217,6 +218,16 @@ export function BottomToolButtons() {
         tooltipSide="right"
         active={bottomTool === "output"}
         onClick={() => toggleBottomTool("output")}
+        className="size-9"
+        size={22}
+      />
+      <IconButton
+        icon={SquareChevronRight}
+        title="Debug Console"
+        shortcut="Ctrl+Shift+Y"
+        tooltipSide="right"
+        active={bottomTool === "debug"}
+        onClick={() => toggleBottomTool("debug")}
         className="size-9"
         size={22}
       />

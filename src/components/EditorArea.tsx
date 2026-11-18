@@ -5,8 +5,17 @@ import { monaco } from "../editor/monaco";
 import { loadModel, modelPath } from "../editor/models";
 import { errorMessage } from "../lib/ipc";
 import { mediaKind } from "../lib/media";
-import { isVirtualTab, parseCommitDiffTab, parseDiffTab, parseExtensionTab, parseWebviewTab } from "../lib/virtualTabs";
+import {
+  isVirtualTab,
+  parseCommitDiffTab,
+  parseCustomEditorTab,
+  parseDiffTab,
+  parseExtensionTab,
+  parseWebviewTab,
+} from "../lib/virtualTabs";
+import { CustomEditorView } from "./CustomEditorView";
 import { attachGitGutter } from "../git/gutter";
+import { attachDebugger } from "../debug/editor";
 import { useWorkspace, type EditorGroup } from "../state/workspace";
 import { DiffView } from "./DiffView";
 import { EditorTabs } from "./EditorTabs";
@@ -138,6 +147,8 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       padding: { top: 6 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
       overviewRulerBorder: false,
+      // Breakpoints and the execution line live in the glyph margin.
+      glyphMargin: true,
       fixedOverflowWidgets: true,
       // Extension grammars colour code through semantic tokens (see editor/textmate.ts).
       // A global option: it also applies to the diff editors.
@@ -146,6 +157,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     editorRef.current = editor;
     editors.set(group.id, editor);
     const gutter = attachGitGutter(editor);
+    const debugging = attachDebugger(editor);
     // Only the focused group's editor drives the status bar.
     const status = () => isFocusedGroup(group.id) && updateStatus(editor);
     const listeners = [
@@ -158,6 +170,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     return () => {
       listeners.forEach((l) => l.dispose());
       gutter.dispose();
+      debugging.dispose();
       if (editors.get(group.id) === editor) editors.delete(group.id);
       editor.dispose();
       editorRef.current = null;
@@ -236,6 +249,7 @@ function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean 
   const diff = activePath ? parseDiffTab(activePath) : null;
   const commitDiff = activePath ? parseCommitDiffTab(activePath) : null;
   const webview = activePath ? parseWebviewTab(activePath) : null;
+  const custom = activePath ? parseCustomEditorTab(activePath) : null;
   const media = activePath && !isVirtualTab(activePath) ? mediaKind(activePath) : null;
 
   return (
@@ -249,6 +263,11 @@ function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean 
         {extension && <ExtensionPage key={activePath} namespace={extension.namespace} name={extension.name} />}
         {diff && <DiffView key={diff} path={diff} />}
         {commitDiff && <DiffView key={activePath} path={commitDiff.file} revision={commitDiff.hash} />}
+        {custom && activePath && (
+          <div className="absolute inset-0 bg-editor">
+            <CustomEditorView key={activePath} tabPath={activePath} viewType={custom.viewType} />
+          </div>
+        )}
         {webview && (
           <div className="absolute inset-0 bg-editor">
             <WebviewAnchor id={webview} />

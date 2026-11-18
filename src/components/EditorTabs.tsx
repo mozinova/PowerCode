@@ -1,11 +1,20 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { Blocks, Columns2, Copy, ExternalLink, EllipsisVertical, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { closeTab, closeTabs } from "../actions";
+import { closeTab, closeTabs, reopenWith } from "../actions";
 import { basename, isWithin, parentDir } from "../lib/paths";
 import { REVEAL_LABEL } from "../lib/platform";
 import { isSshPath } from "../lib/remote";
-import { isVirtualTab, parseCommitDiffTab, parseDiffTab, parseExtensionTab, parseWebviewTab } from "../lib/virtualTabs";
+import {
+  isVirtualTab,
+  parseCommitDiffTab,
+  parseCustomEditorTab,
+  parseDiffTab,
+  parseExtensionTab,
+  parseWebviewTab,
+  tabFilePath,
+} from "../lib/virtualTabs";
+import { customEditorsFor } from "../exthost/customEditors";
 import { GIT_COLORS, gitStateOf, useGit } from "../git/store";
 import { useWorkspace, type EditorGroup, type EditorTab } from "../state/workspace";
 import { EditorTitleActions } from "./ExtensionViews";
@@ -86,7 +95,7 @@ function TabIcon({ tab }: { tab: EditorTab }) {
       />
     );
   }
-  const diffFile = parseDiffTab(tab.path) ?? parseCommitDiffTab(tab.path)?.file;
+  const diffFile = parseDiffTab(tab.path) ?? parseCommitDiffTab(tab.path)?.file ?? parseCustomEditorTab(tab.path)?.path;
   if (diffFile) return <FileIcon name={basename(diffFile)} size={15} />;
   return isVirtualTab(tab.path) ? (
     <Blocks size={15} strokeWidth={1.75} className="shrink-0 text-fg-muted" />
@@ -95,9 +104,9 @@ function TabIcon({ tab }: { tab: EditorTab }) {
   );
 }
 
-/** The file a tab shows, for git colouring: diff tabs show their file's status too. */
+/** The file a tab shows, for git colouring: diff and custom editor tabs show their file's status too. */
 function tabFile(tab: EditorTab): string | null {
-  return parseDiffTab(tab.path) ?? (isVirtualTab(tab.path) ? null : tab.path);
+  return parseCommitDiffTab(tab.path) ? null : tabFilePath(tab.path);
 }
 
 function tabTooltip(tab: EditorTab): string {
@@ -105,6 +114,8 @@ function tabTooltip(tab: EditorTab): string {
   if (parseWebviewTab(tab.path)) return tab.name;
   const commit = parseCommitDiffTab(tab.path);
   if (commit) return `${commit.file} @ ${commit.hash.slice(0, 8)}`;
+  const custom = parseCustomEditorTab(tab.path);
+  if (custom) return custom.path;
   return parseDiffTab(tab.path) ?? tab.path;
 }
 
@@ -275,6 +286,10 @@ export function EditorTabs({ group, focused }: { group: EditorGroup; focused: bo
                 splitGroup(group.id);
               },
             },
+            // Files a custom editor can show can switch between it and the text editor.
+            ...(customEditorsFor(tabFilePath(menu.tab.path) ?? "").length > 0 && !parseCommitDiffTab(menu.tab.path)
+              ? [{ label: "Reopen Editor With…", action: () => void reopenWith(menu.tab.path, group.id) }]
+              : []),
             "separator",
             ...closeActions(tabs, menu.tab, group.id),
             ...pathActions(menu.tab, root),

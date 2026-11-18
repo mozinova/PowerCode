@@ -64,11 +64,32 @@ export function parseWebviewTab(path: string): string | null {
   return path.startsWith(WEBVIEW_PREFIX) ? path.slice(WEBVIEW_PREFIX.length) : null;
 }
 
+const CUSTOM_PREFIX = "custom:";
+
+/** A tab showing `path` in an extension's custom editor (`viewType` has no colon). */
+export function customEditorTabPath(viewType: string, path: string): string {
+  return `${CUSTOM_PREFIX}${viewType}:${path}`;
+}
+
+/** The editor and file of a custom editor tab, or null for any other tab. */
+export function parseCustomEditorTab(path: string): { viewType: string; path: string } | null {
+  if (!path.startsWith(CUSTOM_PREFIX)) return null;
+  const rest = path.slice(CUSTOM_PREFIX.length);
+  const colon = rest.indexOf(":");
+  return colon > 0 ? { viewType: rest.slice(0, colon), path: rest.slice(colon + 1) } : null;
+}
+
+/** The file a tab is about, for tabs that show a file some other way (diffs, custom editors). */
+export function tabFilePath(path: string): string | null {
+  return parseDiffTab(path) ?? parseCommitDiffTab(path)?.file ?? parseCustomEditorTab(path)?.path ?? (isVirtualTab(path) ? null : path);
+}
+
 export function isVirtualTab(path: string): boolean {
   return (
     parseExtensionTab(path) !== null ||
     parseDiffTab(path) !== null ||
     parseCommitDiffTab(path) !== null ||
-    parseWebviewTab(path) !== null
+    parseWebviewTab(path) !== null ||
+    parseCustomEditorTab(path) !== null
   );
 }

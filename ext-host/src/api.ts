@@ -14,6 +14,10 @@ import * as rpc from "./rpc";
 import { host, lookup, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import * as types from "./types";
 import * as views from "./views";
+import { createDebugApi } from "./debug";
+
+/** One debug namespace for all extensions: sessions and breakpoints are shared. */
+const debugApi = createDebugApi();
 import {
   CancellationTokenSource,
   Disposable,
@@ -135,6 +139,11 @@ const onDidChangeActiveTextEditor = new EventEmitter<unknown>();
 const onDidChangeTextEditorSelection = new EventEmitter<unknown>();
 const onDidChangeVisibleTextEditors = new EventEmitter<unknown[]>();
 let activeEditor: ReturnType<typeof textEditor> | undefined;
+
+/** The editor the user is in, for other host modules (e.g. `${file}` in debug configurations). */
+export function currentEditor() {
+  return activeEditor;
+}
 
 function textEditor(document: TextDocumentImpl, selections: Selection[]) {
   const editor = {
@@ -456,7 +465,7 @@ async function showTextDocument(target: TextDocumentImpl | Uri, options?: { sele
 
 // ---- Workspace --------------------------------------------------------------
 
-async function openTextDocument(target?: Uri | string | { language?: string; content?: string }) {
+export async function openTextDocument(target?: Uri | string | { language?: string; content?: string }) {
   if (target === undefined || (typeof target === "object" && !Uri.isUri(target))) {
     const untitled = Uri.from({ scheme: "untitled", path: `Untitled-${documents.size + 1}` });
     const document = new TextDocumentImpl(untitled, (target as any)?.language ?? "plaintext", 1, (target as any)?.content ?? "");
@@ -769,7 +778,8 @@ export function createApi(description: ExtensionDescription) {
       createWebviewPanel: (viewType: string, title: string, showOptions: unknown, options?: unknown) =>
         views.createWebviewPanel(extensionId, viewType, title, showOptions, options),
       registerWebviewPanelSerializer: () => new Disposable(() => {}),
-      registerCustomEditorProvider: (..._args: unknown[]) => stub("window").registerCustomEditorProvider(),
+      registerCustomEditorProvider: (viewType: string, provider: unknown, options?: unknown) =>
+        views.registerCustomEditorProvider(extensionId, viewType, provider, options),
       registerFileDecorationProvider: () => new Disposable(() => {}),
       registerTerminalLinkProvider: () => new Disposable(() => {}),
       registerTerminalProfileProvider: () => new Disposable(() => {}),
@@ -952,7 +962,7 @@ export function createApi(description: ExtensionDescription) {
     },
 
     // Later phases (debugging, tests, source control UI, ...).
-    debug: stub("debug"),
+    debug: debugApi,
     tasks: stub("tasks"),
     scm: stub("scm"),
     comments: stub("comments"),

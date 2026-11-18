@@ -30,8 +30,40 @@ fn git_command(cwd: &str) -> Command {
     cmd
 }
 
+/// The shell script running git in `dir` on an SSH host. It runs in a subshell
+/// (an `exit` must not end the shared remote shell) and keeps stderr apart, so
+/// warnings never mix into the output git commands parse; on failure the
+/// script prints stderr, which becomes the error.
+pub(crate) fn ssh_git_script(dir: &str, args: &[String]) -> String {
+    use crate::remote::quote;
+    let args: Vec<String> = args.iter().map(|a| quote(a)).collect();
+    format!(
+        concat!(
+            "(cd -- {dir} || exit 1; err=$(mktemp) || exit 1; ",
+            "GIT_TERMINAL_PROMPT=0 git -c core.quotepath=false {args} 2>\"$err\"; rc=$?; ",
+            "if [ $rc -ne 0 ]; then cat \"$err\"; fi; rm -f \"$err\"; exit $rc)"
+        ),
+        dir = quote(dir),
+        args = args.join(" "),
+    )
+}
+
+/// Runs git on the SSH host of `cwd` (an `ssh://host/path`), through the workspace's session.
+fn run_ssh(host: &str, dir: &str, args: &[&str]) -> CmdResult<String> {
+    // Arguments that are workspace paths become paths on the host.
+    let args: Vec<String> = args
+        .iter()
+        .map(|a| crate::remote::parse(a).map_or_else(|| a.to_string(), |(_, remote)| remote))
+        .collect();
+    let output = crate::remote::shared().exec_blocking(host, &ssh_git_script(dir, &args))?;
+    Ok(String::from_utf8_lossy(&output).into_owned())
+}
+
 /// Runs git and returns stdout, or stderr as the error.
 fn run(cwd: &str, args: &[&str]) -> CmdResult<String> {
+    if let Some((host, dir)) = crate::remote::parse(cwd) {
+        return run_ssh(host, &dir, args);
+    }
     // Git inside WSL needs Linux paths for any share paths passed as arguments.
     let args: Vec<String> = match crate::wsl::parse_share(cwd) {
         Some(_) => args
@@ -67,6 +99,13 @@ async fn run_async(cwd: String, args: Vec<String>) -> CmdResult<String> {
     .map_err(err)?
 }
 
+/// The workspace path of `relative` (as git prints it) in the repository at `top`.
+fn absolute(top: &str, relative: &str) -> String {
+    let joined = format!("{top}/{relative}");
+    // SSH paths are POSIX paths on the host, whatever the local OS.
+    if top.starts_with("ssh://") { joined } else { native(&joined) }
+}
+
 /// Git prints `/`-separated paths; the rest of the app uses native ones.
 fn native(path: &str) -> String {
     if cfg!(windows) {
@@ -79,6 +118,9 @@ fn native(path: &str) -> String {
 fn toplevel(root: &str) -> CmdResult<String> {
     let top = run(root, &["rev-parse", "--show-toplevel"])?;
     // Git inside WSL answers with a Linux path; the app uses the share path.
+    if let Some((host, _)) = crate::remote::parse(root) {
+        return Ok(crate::remote::join(host, top.trim()));
+    }
     Ok(match crate::wsl::parse_share(root) {
         Some((distro, _)) => crate::wsl::to_share(&distro, top.trim()),
         None => native(top.trim()),
@@ -88,6 +130,10 @@ fn toplevel(root: &str) -> CmdResult<String> {
 /// `path` relative to the repository, `/`-separated, as git expects in specs.
 fn repo_relative(top: &str, path: &str) -> CmdResult<String> {
     let outside = || format!("'{path}' is outside the repository.");
+    if top.starts_with("ssh://") {
+        let prefix = format!("{}/", top.trim_end_matches('/'));
+        return path.strip_prefix(&prefix).map(str::to_string).ok_or_else(outside);
+    }
     if cfg!(windows) {
         // Windows paths are case-insensitive; the UI and git may disagree on case.
         let prefix = top.trim_end_matches('\\');
@@ -144,7 +190,7 @@ fn parse_status(top: &str, output: &str) -> GitStatus {
         top: Some(top.to_string()),
         ..Default::default()
     };
-    let absolute = |p: &str| native(&format!("{top}/{}", p.trim_end_matches('/')));
+    let absolute = |p: &str| absolute(top, p.trim_end_matches('/'));
     let mut records = output.split('\0').filter(|r| !r.is_empty());
 
     while let Some(record) = records.next() {
@@ -472,7 +518,7 @@ pub struct CommitFile {
 
 /// Parses `git diff-tree --name-status -z` output.
 fn parse_name_status(top: &str, output: &str) -> Vec<CommitFile> {
-    let absolute = |p: &str| native(&format!("{top}/{p}"));
+    let absolute = |p: &str| absolute(top, p);
     let mut fields = output.split('\0').filter(|f| !f.is_empty());
     let mut files = Vec::new();
     while let Some(status) = fields.next() {

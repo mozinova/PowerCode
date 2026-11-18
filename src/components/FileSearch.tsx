@@ -1,5 +1,6 @@
 import { Loader2, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { openEditor } from "../actions";
 import { allCommands, recentCommands, runCommand, type Command } from "../commands";
 import { fsApi } from "../lib/ipc";
 import { track } from "../state/activity";
@@ -123,7 +124,6 @@ function Highlighted({ text, indices, offset = 0 }: { text: string; indices: Set
 
 export function FileSearch() {
   const root = useWorkspace((s) => s.root);
-  const openFile = useWorkspace((s) => s.openFile);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [files, setFiles] = useState<string[] | null>(null);
@@ -183,7 +183,7 @@ export function FileSearch() {
 
   const choose = (match: Match | undefined) => {
     if (!match || !root) return;
-    openFile(joinPath(root, match.relative));
+    openEditor(joinPath(root, match.relative));
     dismiss();
   };
 

@@ -54,8 +54,19 @@ export interface CommandInfo {
   enablement?: string;
 }
 
+export interface CustomEditorInfo {
+  viewType: string;
+  displayName: string;
+  /** Globs of the files it opens, such as `*.drawio` or `**` + `/*.md`. */
+  patterns: string[];
+  /** `default` editors open files by default; `option` ones only through "Reopen With". */
+  priority: "default" | "option";
+  extensionId: string;
+}
+
 export interface Contributions {
   containers: ViewContainer[];
+  customEditors: CustomEditorInfo[];
   welcome: WelcomeContent[];
   menus: Record<string, MenuItem[]>;
   commands: Map<string, CommandInfo>;
@@ -100,6 +111,7 @@ export function readContributions(installed: InstalledExtension[]): Contribution
   const welcome: WelcomeContent[] = [];
   const menus: Record<string, MenuItem[]> = {};
   const commands = new Map<string, CommandInfo>();
+  const customEditors: CustomEditorInfo[] = [];
 
   for (const ext of installed) {
     const contributes = (ext.manifest.contributes ?? {}) as Record<string, any>;
@@ -131,6 +143,16 @@ export function readContributions(installed: InstalledExtension[]): Contribution
     for (const [menu, items] of Object.entries<any[]>(contributes.menus ?? {})) {
       if (!Array.isArray(items)) continue;
       (menus[menu] ??= []).push(...items.filter((i) => typeof i?.command === "string"));
+    }
+    for (const e of contributes.customEditors ?? []) {
+      if (!e?.viewType) continue;
+      customEditors.push({
+        viewType: e.viewType,
+        displayName: localized(text(e.displayName)) || e.viewType,
+        patterns: (e.selector ?? []).map((s: { filenamePattern?: string }) => s?.filenamePattern).filter(Boolean),
+        priority: e.priority === "option" ? "option" : "default",
+        extensionId: ext.id,
+      });
     }
     for (const w of contributes.viewsWelcome ?? []) {
       if (w?.view && w.contents) welcome.push({ view: w.view, contents: localized(text(w.contents)), when: w.when });
@@ -173,6 +195,7 @@ export function readContributions(installed: InstalledExtension[]): Contribution
 
   return {
     containers: [...containers.values()].filter((c) => c.views.length > 0),
+    customEditors,
     welcome,
     menus,
     commands,

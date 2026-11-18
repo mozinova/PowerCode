@@ -1,10 +1,11 @@
 import { create } from "zustand";
 import { basename, movedPath } from "../lib/paths";
+import { parseCustomEditorTab } from "../lib/virtualTabs";
 import { sideOf } from "./toolLayout";
 
 /** Built-in tool windows, and `view:<container>` for extensions' view containers. */
-export type ToolId = "project" | "commit" | "search" | "remote" | "extensions" | `view:${string}`;
-export type BottomTool = "terminal" | "output";
+export type ToolId = "project" | "commit" | "search" | "remote" | "extensions" | "debug" | `view:${string}`;
+export type BottomTool = "terminal" | "output" | "debug";
 
 export interface EditorTab {
   path: string;
@@ -220,7 +221,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   setDirty: (path, dirty) =>
     set((s) =>
       withGroups(
-        mapTabs(s.groups, (t) => (t.path === path && t.dirty !== dirty ? { ...t, dirty } : t)),
+        // A custom editor showing the file (as text) is dirty with it.
+        mapTabs(s.groups, (t) =>
+          (t.path === path || parseCustomEditorTab(t.path)?.path === path) && t.dirty !== dirty ? { ...t, dirty } : t,
+        ),
         s.activeGroup,
       ),
     ),
