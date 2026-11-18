@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { closeActiveTab, lastRoot, openFolder, openSettings, saveActive } from "./actions";
+import { listenForOpenRequests, openFiles, takeStartupRequests } from "./cli";
 import { MainToolbar, StatusBar } from "./components/Chrome";
 import { EditorArea } from "./components/EditorArea";
 import { CommitView } from "./components/CommitView";
@@ -132,8 +133,15 @@ export default function App() {
     startExtensionHost();
     startGitWatcher();
     startAutoSave();
-    const previous = lastRoot();
-    if (previous) void openFolder(previous);
+    // A folder given on the command line (or "Open with") wins over the last one.
+    listenForOpenRequests();
+    void takeStartupRequests().then(async (requests) => {
+      const folder = requests.find((r) => r.isDir);
+      const previous = lastRoot();
+      if (folder) await openFolder(folder.path);
+      else if (previous) await openFolder(previous);
+      openFiles(requests);
+    });
   }, []);
 
   return (

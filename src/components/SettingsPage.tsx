@@ -1,5 +1,6 @@
-import { FileJson, RotateCcw, Search } from "lucide-react";
+import { Check, FileJson, RotateCcw, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { installShellCommand, registerOpenWith, systemApi, uninstallShellCommand, unregisterOpenWith, type IntegrationStatus } from "../cli";
 import { openUserSettings } from "../exthost/settings";
 import { useExtensions } from "../extensions/runtime";
 import { BUILTIN_SECTIONS, extensionSections, type SettingDef, type SettingOption, type SettingsSection } from "../settings/registry";
@@ -143,6 +144,92 @@ function SettingRow({ def }: { def: SettingDef }) {
   );
 }
 
+const SYSTEM_WORDS = "system shell command path terminal cli open with context menu explorer finder powercode";
+
+function SystemAction({ label, done, onRun, onUndo, runLabel, undoLabel }: { label: string; done: boolean; onRun: () => Promise<void>; onUndo: () => Promise<void>; runLabel: string; undoLabel: string }) {
+  const [busy, setBusy] = useState(false);
+  const run = (action: () => Promise<void>) => async () => {
+    setBusy(true);
+    await action();
+    setBusy(false);
+  };
+  return (
+    <div className="mt-2 flex items-center gap-2">
+      {done && (
+        <span className="flex items-center gap-1 text-[13px] text-[#5fb865]">
+          <Check size={14} /> {label}
+        </span>
+      )}
+      <button
+        type="button"
+        disabled={busy}
+        onClick={run(done ? onUndo : onRun)}
+        className={`h-7 rounded-md px-3 text-[13px] disabled:opacity-50 ${done ? "border border-line-soft text-fg hover:bg-hover" : "bg-accent font-medium text-white hover:bg-accent-hover"}`}
+      >
+        {done ? undoLabel : runLabel}
+      </button>
+    </div>
+  );
+}
+
+/** The shell command and "Open with", which live outside settings.json. */
+function SystemSection() {
+  const [status, setStatus] = useState<IntegrationStatus | null>(null);
+  const refresh = () => void systemApi.status().then(setStatus).catch(() => setStatus(null));
+  useEffect(refresh, []);
+  if (!status) return null;
+  const after = (action: () => Promise<void>) => async () => {
+    await action();
+    refresh();
+  };
+  return (
+    <section data-section="system" className="pb-4">
+      <h2 className="sticky top-0 z-10 bg-editor px-4 pt-2 pb-2 text-base font-semibold">System</h2>
+      <div className="border-l-2 border-transparent py-2.5 pr-4 pl-4">
+        <div className="text-[13px]">
+          <span className="text-fg-muted">System: </span>
+          <span className="font-semibold">Shell Command</span>
+        </div>
+        <Description text={`Opens files and folders from a terminal: \`powercode .\`, \`powercode file.ts\` or \`powercode -g file.ts:42\` (at a line). Installed at \`${status.commandPath}\`.`} />
+        {status.commandInstalled && !status.commandOnPath && (
+          <p className="mt-1 text-xs text-[#e0b84c]">Its folder is not on your PATH yet: add it to your shell profile.</p>
+        )}
+        <SystemAction
+          label="Installed"
+          done={status.commandInstalled}
+          onRun={after(installShellCommand)}
+          onUndo={after(uninstallShellCommand)}
+          runLabel="Install 'powercode' in PATH"
+          undoLabel="Uninstall"
+        />
+      </div>
+      <div className="border-l-2 border-transparent py-2.5 pr-4 pl-4">
+        <div className="text-[13px]">
+          <span className="text-fg-muted">System: </span>
+          <span className="font-semibold">Open With</span>
+        </div>
+        <Description
+          text={
+            status.openWithSupported
+              ? "Offers PowerCode in the \"Open with\" menu of code and text files, and \"Open with PowerCode\" on files and folders. It never becomes the default app for a file type."
+              : "PowerCode appears in Finder's \"Open With\" menu for code and text files (declared by the installed app)."
+          }
+        />
+        {status.openWithSupported && (
+          <SystemAction
+            label="Added"
+            done={status.openWithRegistered}
+            onRun={after(registerOpenWith)}
+            onUndo={after(unregisterOpenWith)}
+            runLabel={'Add to "Open with"'}
+            undoLabel="Remove"
+          />
+        )}
+      </div>
+    </section>
+  );
+}
+
 function matches(def: SettingDef, section: SettingsSection, words: string[]): boolean {
   const haystack = `${def.key} ${def.group} ${def.title} ${def.description} ${section.title}`.toLowerCase();
   return words.every((w) => haystack.includes(w));
@@ -187,6 +274,7 @@ export function SettingsPage() {
   };
 
   const builtin = shown.filter((s) => !s.extensionId);
+  const showSystem = words.every((w) => SYSTEM_WORDS.includes(w));
   const extensions = shown.filter((s) => s.extensionId);
   const navItem = (section: SettingsSection) => (
     <button
@@ -231,14 +319,24 @@ export function SettingsPage() {
         <nav aria-label="Settings sections" className="w-56 shrink-0 overflow-y-auto px-3 pb-4">
           <div className="px-2 pt-1 pb-1 text-[11px] font-semibold tracking-wide text-fg-subtle uppercase">PowerCode</div>
           {builtin.map(navItem)}
+          {showSystem && navItem({ id: "system", title: "System", settings: [] })}
           {extensions.length > 0 && (
             <div className="px-2 pt-4 pb-1 text-[11px] font-semibold tracking-wide text-fg-subtle uppercase">Extensions</div>
           )}
           {extensions.map(navItem)}
         </nav>
         <div ref={listRef} onScroll={onScroll} className="min-w-0 flex-1 overflow-y-auto pr-6 pb-10">
-          {shown.length === 0 && <p className="px-4 py-6 text-fg-muted">No settings match "{query}".</p>}
-          {shown.map((section) => (
+          {shown.length === 0 && !showSystem && <p className="px-4 py-6 text-fg-muted">No settings match "{query}".</p>}
+          {builtin.map((section) => (
+            <section key={section.id} data-section={section.id} className="pb-4">
+              <h2 className="sticky top-0 z-10 bg-editor px-4 pt-2 pb-2 text-base font-semibold">{section.title}</h2>
+              {section.settings.map((def) => (
+                <SettingRow key={def.key} def={def} />
+              ))}
+            </section>
+          ))}
+          {showSystem && <SystemSection />}
+          {extensions.map((section) => (
             <section key={section.id} data-section={section.id} className="pb-4">
               <h2 className="sticky top-0 z-10 bg-editor px-4 pt-2 pb-2 text-base font-semibold">{section.title}</h2>
               {section.settings.map((def) => (

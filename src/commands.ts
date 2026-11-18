@@ -18,6 +18,9 @@ import { setAutoSave, setAutoUpdateExtensions, useSettings } from "./state/setti
 import { checkForUpdates, useExtensions } from "./extensions/runtime";
 import { restartExtensionHost, showOutput } from "./exthost/host";
 import { openUserSettings } from "./exthost/settings";
+import { installShellCommand, registerOpenWith, uninstallShellCommand, unregisterOpenWith } from "./cli";
+
+const IS_MAC = navigator.userAgent.includes("Mac");
 import * as hostRpc from "./exthost/rpc";
 import { useExtensionHost } from "./exthost/state";
 import { useWorkspace, type ToolId } from "./state/workspace";
@@ -177,6 +180,10 @@ export const COMMANDS: Command[] = [
   },
   { id: "preferences.theme", category: "Preferences", label: "Color Theme / File Icon Theme", run: () => showTool("extensions") },
   { id: "preferences.settings", category: "Preferences", label: "Open Settings", shortcut: "Ctrl+,", run: () => openSettings() },
+  { id: "shell.install", category: "Shell Command", label: "Install 'powercode' Command in PATH", run: installShellCommand },
+  { id: "shell.uninstall", category: "Shell Command", label: "Uninstall 'powercode' Command from PATH", run: uninstallShellCommand },
+  { id: "system.registerOpenWith", category: "System", label: "Add PowerCode to \"Open With\" and Context Menus", when: () => !IS_MAC, run: registerOpenWith },
+  { id: "system.unregisterOpenWith", category: "System", label: "Remove PowerCode from \"Open With\" and Context Menus", when: () => !IS_MAC, run: unregisterOpenWith },
   { id: "preferences.settingsJson", category: "Preferences", label: "Open User Settings (JSON)", run: openUserSettings },
   { id: "window.maximize", category: "Window", label: "Toggle Maximize", run: () => getCurrentWindow().toggleMaximize() },
   { id: "window.minimize", category: "Window", label: "Minimize", run: () => getCurrentWindow().minimize() },

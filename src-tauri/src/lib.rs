@@ -1,3 +1,4 @@
+mod cli;
 mod error;
 mod extensions;
 mod exthost;
@@ -7,12 +8,17 @@ mod git;
 mod profiles;
 mod remote;
 mod search;
+mod system;
 mod terminal;
 mod wsl;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, so a second `powercode <path>` hands its paths to this window and exits.
+        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            cli::deliver(app, cli::parse_args(&argv, std::path::Path::new(&cwd)));
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(terminal::Terminals::default())
@@ -20,6 +26,14 @@ pub fn run() {
         .manage(remote::shared())
         .manage(exthost::ExtensionHost::default())
         .manage(webview::Webviews::default())
+        .manage(cli::CliState::from_process())
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(data) = app.path().app_data_dir() {
+                system::setup_on_first_run(&data);
+            }
+            Ok(())
+        })
         .register_asynchronous_uri_scheme_protocol(webview::SCHEME, webview::handle)
         .invoke_handler(tauri::generate_handler![
             fs::list_dir,
@@ -69,7 +83,27 @@ pub fn run() {
             extensions::extensions_install,
             extensions::extensions_uninstall,
             extensions::extensions_read_file,
+            cli::cli_take_pending,
+            system::system_integration_status,
+            system::system_install_command,
+            system::system_uninstall_command,
+            system::system_register_open_with,
+            system::system_unregister_open_with,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, _event| {
+            // macOS delivers "Open With" and Dock drops as events, not arguments.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = _event {
+                let cwd = std::env::current_dir().unwrap_or_default();
+                let paths: Vec<String> = urls
+                    .iter()
+                    .filter_map(|url| url.to_file_path().ok())
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect();
+                let argv: Vec<String> = std::iter::once(String::new()).chain(paths).collect();
+                cli::deliver(_app, cli::parse_args(&argv, &cwd));
+            }
+        });
 }

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "fileAssociations": [
+      {
+        "name": "Source Code",
+        "description": "Code and text files PowerCode can edit",
+        "role": "Editor",
+        "rank": "Alternate",
+        "ext": [
+          "txt", "md", "markdown", "json", "jsonc", "js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx", "css", "scss", "less",
+          "html", "htm", "xml", "svg", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "log", "csv", "tsv", "py", "pyi", "rs",
+          "go", "java", "kt", "kts", "scala", "c", "h", "cpp", "hpp", "cc", "cs", "fs", "php", "rb", "lua", "swift", "dart",
+          "vue", "svelte", "astro", "sh", "bash", "zsh", "fish", "ps1", "bat", "cmd", "sql", "graphql", "gql", "prisma", "proto",
+          "tf", "gradle", "lock"
+        ]
+      }
+    ]
+  }
+}
