@@ -91,7 +91,7 @@ export default function App() {
       <div aria-hidden className="frame-glow pointer-events-none absolute inset-x-0 top-0 h-80" />
       <MainToolbar />
       {/* Tool windows and the editor are islands floating on the frame, as in IntelliJ's Islands theme. */}
-      <div className="relative flex min-h-0 flex-1 pt-1 pr-2.5 pb-1">
+      <div className="island-area relative flex min-h-0 flex-1">
         <ToolStripe />
         <Group orientation="vertical" className="min-w-0 flex-1">
           <Panel id="main" minSize={120}>

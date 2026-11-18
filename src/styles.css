@@ -61,11 +61,19 @@ body {
   background: transparent;
 }
 
-/* Resize handles between tool windows: invisible 1px line with a wider hit area. */
+/*
+ * Resize handles: a 1px line with a wider hit area. Their size is set with
+ * width/height because the panels library sets `flex-basis: auto` inline.
+ */
 [data-separator] {
   position: relative;
   background: var(--color-line);
-  flex: 0 0 1px;
+}
+[data-separator][aria-orientation="vertical"] {
+  width: 1px;
+}
+[data-separator][aria-orientation="horizontal"] {
+  height: 1px;
 }
 [data-separator="active"],
 [data-separator="hover"] {
@@ -86,11 +94,21 @@ body {
 
 /*
  * Between islands the separator is the gap itself: transparent, with a thin
- * accent line in its middle while hovered or dragged.
+ * accent line in its middle while hovered or dragged. The gap between islands
+ * is half the margin around them.
  */
+:root {
+  --island-margin: 10px;
+  --island-gap: calc(var(--island-margin) / 2);
+}
 [data-separator].island-gap {
-  flex-basis: 10px;
   background: transparent;
+}
+[data-separator].island-gap[aria-orientation="vertical"] {
+  width: var(--island-gap);
+}
+[data-separator].island-gap[aria-orientation="horizontal"] {
+  height: var(--island-gap);
 }
 [data-separator].island-gap::before {
   content: "";
@@ -100,10 +118,15 @@ body {
   transition: background-color 120ms;
 }
 [data-separator].island-gap[aria-orientation="vertical"]::before {
-  inset: 14px 4px;
+  inset: 14px 1.5px;
 }
 [data-separator].island-gap[aria-orientation="horizontal"]::before {
-  inset: 4px 14px;
+  inset: 1.5px 14px;
+}
+
+/* Space between the islands and the window around them. */
+.island-area {
+  padding: 0 var(--island-margin) var(--island-margin) 0;
 }
 [data-separator].island-gap[data-separator="hover"]::before,
 [data-separator].island-gap[data-separator="active"]::before {
