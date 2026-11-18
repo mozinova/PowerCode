@@ -86,31 +86,38 @@ export default function App() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col bg-frame">
+      {/* One glow behind both the title bar and the stripe, painted under them. */}
+      <div aria-hidden className="frame-glow pointer-events-none absolute inset-x-0 top-0 h-80" />
       <MainToolbar />
-      <div className="flex min-h-0 flex-1 border-t border-line">
+      {/* Tool windows and the editor are islands floating on the frame, as in IntelliJ's Islands theme. */}
+      <div className="relative flex min-h-0 flex-1 pt-1 pr-2.5 pb-1">
         <ToolStripe />
         <Group orientation="vertical" className="min-w-0 flex-1">
           <Panel id="main" minSize={120}>
             <Group orientation="horizontal">
               {leftTool && (
                 <>
-                  <Panel id="left" defaultSize={300} minSize={180} className="bg-panel">
-                    {TOOL_WINDOWS[leftTool]}
+                  <Panel id="left" defaultSize={300} minSize={180}>
+                    <div className="island">{TOOL_WINDOWS[leftTool]}</div>
                   </Panel>
-                  <Separator />
+                  <Separator className="island-gap" />
                 </>
               )}
               <Panel id="editor" minSize={240}>
-                <EditorArea />
+                <div className="island">
+                  <EditorArea />
+                </div>
               </Panel>
             </Group>
           </Panel>
           {bottomTool && (
             <>
-              <Separator />
+              <Separator className="island-gap" />
               <Panel id="bottom" defaultSize={260} minSize={100}>
-                <TerminalPanel />
+                <div className="island">
+                  <TerminalPanel />
+                </div>
               </Panel>
             </>
           )}

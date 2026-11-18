@@ -122,7 +122,7 @@ export function MainToolbar() {
   return (
     // Only elements carrying `data-tauri-drag-region` themselves drag the window.
     // The side columns share the free width equally so the search stays centred.
-    <header data-tauri-drag-region className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 bg-panel">
+    <header data-tauri-drag-region className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 relative">
       <div data-tauri-drag-region className="flex h-full min-w-0 items-center gap-2 pl-2">
         <MainMenu />
         <button
@@ -152,7 +152,7 @@ export function ToolStripe() {
   const toggleLeftTool = useWorkspace((s) => s.toggleLeftTool);
   const toggleBottomTool = useWorkspace((s) => s.toggleBottomTool);
   return (
-    <nav aria-label="Tool windows" className="flex w-12 shrink-0 flex-col items-center gap-1.5 border-r border-line bg-panel py-1.5">
+    <nav aria-label="Tool windows" className="flex w-12 shrink-0 flex-col items-center gap-1.5 py-1">
       <IconButton
         icon={Folder}
         title="Project"
@@ -289,7 +289,7 @@ export function StatusBar() {
   }
 
   return (
-    <footer className="flex h-6 shrink-0 items-center justify-between gap-4 border-t border-line bg-panel px-2 text-xs text-fg-muted">
+    <footer className="relative flex h-6 shrink-0 items-center justify-between gap-4 px-2 text-xs text-fg-muted">
       <div className="flex h-full min-w-0 items-center truncate">
         <RemoteIndicator />
         <ActivityIndicator />

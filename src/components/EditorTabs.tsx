@@ -135,8 +135,8 @@ function Tab({
         e.preventDefault();
         onContextMenu(e.clientX, e.clientY);
       }}
-      className={`group relative flex h-full shrink-0 cursor-default items-center gap-1.5 pr-1.5 pl-3 ${
-        active ? "bg-editor text-fg" : "text-fg-muted hover:bg-hover/60 hover:text-fg"
+      className={`group relative flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1 pl-2.5 ${
+        active ? "bg-[#25324d] text-fg ring-1 ring-accent/70 ring-inset" : "text-fg-muted hover:bg-hover/60 hover:text-fg"
       }`}
     >
       <TabIcon tab={tab} />
@@ -157,7 +157,6 @@ function Tab({
         {tab.dirty && <span className="size-2 rounded-full bg-fg-muted group-hover:hidden" />}
         <X size={13} className={tab.dirty ? "hidden group-hover:block" : ""} />
       </button>
-      {active && <div className="absolute inset-x-0 bottom-0 h-[2px] bg-accent" />}
     </div>
   );
 }
@@ -216,14 +215,14 @@ export function EditorTabs() {
   const closeMenu = useCallback(() => setMenu(null), []);
 
   return (
-    <div className="flex h-9 shrink-0 border-b border-line bg-panel">
+    <div className="flex h-10 shrink-0 items-center border-b border-line-soft/60 bg-editor">
       <div
         role="tablist"
         // Vertical wheel scrolls the tabs sideways, as in IntelliJ.
         onWheel={(e) => {
           if (e.deltaY) e.currentTarget.scrollLeft += e.deltaY;
         }}
-        className="flex min-w-0 flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none]"
+        className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overflow-y-hidden px-1.5 [scrollbar-width:none]"
       >
         {tabs.map((tab) => (
           <Tab

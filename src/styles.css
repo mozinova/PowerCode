@@ -1,8 +1,10 @@
 @import "tailwindcss";
 @import "@xterm/xterm/css/xterm.css";
 
-/* IntelliJ New UI — Dark */
+/* IntelliJ New UI — Dark, "Islands" layout */
 @theme {
+  /* The window behind the islands (tool windows, editor). */
+  --color-frame: #0d0e10;
   --color-editor: #1e1f22;
   --color-panel: #2b2d30;
   --color-line: #1e1f22;
@@ -33,7 +35,7 @@ body,
 }
 
 body {
-  background: var(--color-panel);
+  background: var(--color-frame);
   color: var(--color-fg);
   font-family: var(--font-ui);
   font-size: 13px;
@@ -80,6 +82,58 @@ body {
 }
 [data-separator][aria-orientation="horizontal"]::after {
   inset: -3px 0;
+}
+
+/*
+ * Between islands the separator is the gap itself: transparent, with a thin
+ * accent line in its middle while hovered or dragged.
+ */
+[data-separator].island-gap {
+  flex-basis: 10px;
+  background: transparent;
+}
+[data-separator].island-gap::before {
+  content: "";
+  position: absolute;
+  border-radius: 1px;
+  background: transparent;
+  transition: background-color 120ms;
+}
+[data-separator].island-gap[aria-orientation="vertical"]::before {
+  inset: 14px 4px;
+}
+[data-separator].island-gap[aria-orientation="horizontal"]::before {
+  inset: 4px 14px;
+}
+[data-separator].island-gap[data-separator="hover"]::before,
+[data-separator].island-gap[data-separator="active"]::before {
+  background: var(--color-accent);
+}
+
+/* A tool window or the editor, floating on the frame with rounded corners. */
+.island {
+  height: 100%;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--color-panel);
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.035);
+}
+
+/*
+ * The glow behind the title bar and the tool window stripe (IntelliJ's project
+ * colour gradient): black over the stripe, then orange-red, then navy blue,
+ * fading down into the frame.
+ */
+.frame-glow {
+  background: linear-gradient(
+    90deg,
+    #000 0,
+    #000 3rem,
+    rgb(232 84 47 / 0.5) 14rem,
+    rgb(28 46 102 / 0.85) 34rem,
+    rgb(28 46 102 / 0) 62rem
+  );
+  mask-image: linear-gradient(to bottom, #000 0, #000 2.5rem, transparent 100%);
 }
 
 /* Rendered READMEs on extension pages, close to GitHub's markdown style. */
