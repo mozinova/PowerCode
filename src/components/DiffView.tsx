@@ -1,6 +1,7 @@
 import { Columns2, FileText, Rows2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { monaco } from "../editor/monaco";
+import { editorOptions, followEditorSettings } from "../editor/options";
 import { getModel } from "../editor/models";
 import { headContent } from "../git/gutter";
 import { fileState, useGit } from "../git/store";
@@ -47,16 +48,16 @@ export function DiffView({ path, revision }: { path: string; revision?: string }
       automaticLayout: true,
       readOnly: true,
       originalEditable: false,
-      fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace',
-      fontSize: 13,
-      lineHeight: 20,
+      ...editorOptions(),
       minimap: { enabled: false },
       scrollBeyondLastLine: false,
       renderOverviewRuler: true,
       ignoreTrimWhitespace: false,
     });
     editorRef.current = editor;
+    const unfollow = followEditorSettings(editor);
     return () => {
+      unfollow();
       const model = editor.getModel();
       editor.dispose();
       model?.original.dispose();

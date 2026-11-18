@@ -21,7 +21,9 @@ import { closeTerminal, newTerminal, setActiveTerminal, type TerminalSession } f
 import { cancelAllDialogs, showInputBox, showQuickPick } from "./dialogs";
 import { pathFromUri, registerProvider, resetLanguageFeatures, setDiagnostics, setDocumentFlusher, unregisterProvider } from "./languages";
 import * as rpc from "./rpc";
-import { ensureUserSettingsFile, readUserSettings, updateUserSetting, userSettingsPath } from "./settings";
+import { openUserSettings, userSettingsPath } from "./settings";
+import { loadUserSettings, setUserSetting, useUserSettings } from "../settings/store";
+import { openSettings } from "../actions";
 import { appendOutput, log, useExtensionHost, type ContributedCommand, type StatusItem } from "./state";
 import { contributions, registerViewHandlers, resetViews, setConfigurationContext } from "./views";
 import { registerCustomEditorHandlers, resetCustomEditors } from "./customEditors";
@@ -129,7 +131,9 @@ async function start(key: string, extensions: InstalledExtension[], root: string
       await rpc.startProcess(onUnexpectedExit);
       const data = await appDataDir();
       const storageKey = root ? hashKey(root) : "empty";
-      const settings = await readUserSettings().catch(() => ({}));
+      await loadUserSettings();
+      const settings = useUserSettings.getState().values;
+      lastSettings = JSON.stringify(settings);
       const result = await rpc.request<{ commands: ContributedCommand[]; defaults: Record<string, unknown> }>("initialize", {
         workspaceFolders: root ? [{ uri: monaco.Uri.file(root).toString(), name: basename(root) }] : [],
         extensions: extensions.map((e) => ({ id: e.id, path: e.path, manifest: e.manifest })),
@@ -243,9 +247,8 @@ function sendActiveEditor() {
 
 let lastSettings = "";
 
-async function sendSettings() {
-  const settings = await readUserSettings().catch(() => null);
-  if (!settings) return;
+/** Tells extensions about the settings in the store, if they changed. */
+function sendSettings(settings: Record<string, unknown> = useUserSettings.getState().values) {
   const json = JSON.stringify(settings);
   if (json === lastSettings) return;
   lastSettings = json;
@@ -253,10 +256,6 @@ async function sendSettings() {
   rpc.notify("configuration/changed", { settings });
 }
 
-export async function openUserSettings() {
-  const path = await ensureUserSettingsFile();
-  useWorkspace.getState().openFile(path);
-}
 
 // ---- Output, progress, terminals -------------------------------------------------------
 
@@ -348,8 +347,11 @@ async function executeBuiltin(command: string, args: any[]): Promise<unknown> {
     case "workbench.action.files.saveAll":
       return saveAll();
     case "workbench.action.openSettings":
-    case "workbench.action.openSettingsJson":
     case "workbench.action.openGlobalSettings":
+      // Extensions pass a search, e.g. `@ext:publisher.name` or a setting id.
+      openSettings(typeof args[0] === "string" ? args[0].replace(/^@ext:\S+\s*/, "") || args[0] : typeof args[0]?.query === "string" ? args[0].query : undefined);
+      return null;
+    case "workbench.action.openSettingsJson":
       return openUserSettings();
     case "workbench.action.reloadWindow":
       window.location.reload();
@@ -590,8 +592,7 @@ function registerHandlers() {
   rpc.onRequest("workspace/saveAll", saveAll);
   rpc.onRequest("commands/executeBuiltin", ({ command, args }) => executeBuiltin(command, args ?? []));
   rpc.onRequest("configuration/update", async ({ key, value }) => {
-    await updateUserSetting(key, value);
-    await sendSettings();
+    await setUserSetting(key, value);
     return null;
   });
   rpc.onRequest("languages/detect", ({ uri }) => detectLanguage(pathFromUri(uri)));
@@ -637,6 +638,9 @@ export function startExtensionHost() {
   initialized = true;
   registerHandlers();
   registerDebugHover();
+  useUserSettings.subscribe((state, previous) => {
+    if (state.values !== previous.values && rpc.isRunning()) sendSettings(state.values);
+  });
   listenToWebviews();
   setDocumentFlusher((uri) => syncedDocuments.get(uri)?.flush());
 
@@ -646,7 +650,8 @@ export function startExtensionHost() {
     const uri = model.uri.toString();
     syncedDocuments.get(uri)?.flush();
     if (rpc.isRunning() && syncedDocuments.has(uri)) rpc.notify("documents/save", { uri });
-    if (path === (await userSettingsPath())) void sendSettings();
+    // Edits saved in settings.json reach the store (and from it, extensions and the editor).
+    if (path === (await userSettingsPath())) void loadUserSettings();
   });
 
   // The active editor: tab switches, group focus and cursor moves (debounced).

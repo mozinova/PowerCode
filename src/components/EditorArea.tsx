@@ -12,10 +12,13 @@ import {
   parseDiffTab,
   parseExtensionTab,
   parseWebviewTab,
+  SETTINGS_TAB,
 } from "../lib/virtualTabs";
+import { SettingsPage } from "./SettingsPage";
 import { CustomEditorView } from "./CustomEditorView";
 import { attachGitGutter } from "../git/gutter";
 import { attachDebugger } from "../debug/editor";
+import { editorOptions, followEditorSettings } from "../editor/options";
 import { useWorkspace, type EditorGroup } from "../state/workspace";
 import { DiffView } from "./DiffView";
 import { EditorTabs } from "./EditorTabs";
@@ -135,15 +138,10 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     const editor = monaco.editor.create(containerRef.current!, {
       model: null,
       automaticLayout: true,
-      fontFamily: '"JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace',
-      fontSize: 13,
-      lineHeight: 20,
-      fontLigatures: true,
-      minimap: { enabled: false },
       scrollBeyondLastLine: false,
       renderLineHighlight: "all",
-      smoothScrolling: true,
-      stickyScroll: { enabled: true },
+      // Fonts, wrapping, minimap, ... come from the user's settings (see editor/options.ts).
+      ...editorOptions(),
       padding: { top: 6 },
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
       overviewRulerBorder: false,
@@ -158,6 +156,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     editors.set(group.id, editor);
     const gutter = attachGitGutter(editor);
     const debugging = attachDebugger(editor);
+    const unfollow = followEditorSettings(editor);
     // Only the focused group's editor drives the status bar.
     const status = () => isFocusedGroup(group.id) && updateStatus(editor);
     const listeners = [
@@ -171,6 +170,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       listeners.forEach((l) => l.dispose());
       gutter.dispose();
       debugging.dispose();
+      unfollow();
       if (editors.get(group.id) === editor) editors.delete(group.id);
       editor.dispose();
       editorRef.current = null;
@@ -263,6 +263,7 @@ function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean 
         {extension && <ExtensionPage key={activePath} namespace={extension.namespace} name={extension.name} />}
         {diff && <DiffView key={diff} path={diff} />}
         {commitDiff && <DiffView key={activePath} path={commitDiff.file} revision={commitDiff.hash} />}
+        {activePath === SETTINGS_TAB && <SettingsPage />}
         {custom && activePath && (
           <div className="absolute inset-0 bg-editor">
             <CustomEditorView key={activePath} tabPath={activePath} viewType={custom.viewType} />

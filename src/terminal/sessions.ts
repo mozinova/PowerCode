@@ -3,6 +3,7 @@ import { Terminal, type ITheme } from "@xterm/xterm";
 import { create } from "zustand";
 import { terminalApi, type TerminalProfile, type TerminalProgram } from "../lib/ipc";
 import { remoteLabel, remoteOf } from "../lib/remote";
+import { setting, useUserSettings } from "../settings/store";
 
 const THEME: ITheme = {
   background: "#1e1f22",
@@ -29,6 +30,14 @@ const THEME: ITheme = {
 
 let nextKey = 1;
 
+const TERMINAL_FONT = '"JetBrains Mono", "Cascadia Mono", Consolas, Menlo, monospace';
+
+/** `terminal.integrated.fontFamily` (else the editor's font) and `fontSize`. */
+function terminalFont(values = useUserSettings.getState().values) {
+  const family = setting("terminal.integrated.fontFamily", "", values) || setting("editor.fontFamily", "", values) || TERMINAL_FONT;
+  return { family, size: setting("terminal.integrated.fontSize", 13, values) };
+}
+
 /**
  * An xterm instance bound to a shell process. It lives outside React so the
  * shell survives the terminal tool window being hidden.
@@ -41,8 +50,8 @@ export class TerminalSession {
   private readonly host = document.createElement("div");
   private readonly term = new Terminal({
     theme: THEME,
-    fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, Menlo, monospace',
-    fontSize: 13,
+    fontFamily: terminalFont().family,
+    fontSize: terminalFont().size,
     cursorBlink: true,
     allowProposedApi: true,
     scrollback: 10000,
@@ -91,6 +100,13 @@ export class TerminalSession {
 
   focus() {
     this.term.focus();
+  }
+
+  /** Applies the terminal font settings. */
+  setFont(family: string, size: number) {
+    this.term.options.fontFamily = family;
+    this.term.options.fontSize = size;
+    this.layout();
   }
 
   /** Types `text` into the shell, as if entered by the user. */
@@ -219,3 +235,10 @@ export function newProgramTerminal(cwd: string | null, title: string, program: T
   useTerminals.setState({ sessions: [...sessions, session], active: session });
   return session;
 }
+
+// Open terminals follow font changes in the settings.
+useUserSettings.subscribe((state, previous) => {
+  if (state.values === previous.values) return;
+  const { family, size } = terminalFont(state.values);
+  useTerminals.getState().sessions.forEach((session) => session.setFont(family, size));
+});

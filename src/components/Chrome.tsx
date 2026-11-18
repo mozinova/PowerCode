@@ -4,7 +4,7 @@
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { ChevronDown, Copy, Loader2, Menu, Minus, Server, Square, Unplug, X, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { closeActiveTab, closeFolder, closeRemoteConnection, openFolder, saveActive } from "../actions";
+import { closeActiveTab, closeFolder, closeRemoteConnection, openFolder, openSettings, saveActive } from "../actions";
 import { basename } from "../lib/paths";
 import { remoteLabel, remoteOf } from "../lib/remote";
 import * as hostRpc from "../exthost/rpc";
@@ -43,6 +43,8 @@ function MainMenu() {
     { label: "Extensions", shortcut: "Alt+2", action: () => toggleTool("extensions") },
     { label: "Terminal", shortcut: "Alt+F12", action: () => toggleBottomTool("terminal") },
     { label: "Output", action: () => toggleBottomTool("output") },
+    "separator",
+    { label: "Settings…", shortcut: "Ctrl+,", action: () => openSettings() },
   ];
 
   return (

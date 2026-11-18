@@ -5,6 +5,7 @@ import { appDataDir, join } from "@tauri-apps/api/path";
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser";
 import { fsApi } from "../lib/ipc";
 import { getModel, saveModel } from "../editor/models";
+import { useWorkspace } from "../state/workspace";
 
 let settingsPath: Promise<string> | null = null;
 
@@ -56,4 +57,9 @@ export async function ensureUserSettingsFile(): Promise<string> {
     await fsApi.writeTextFile(path, "{\n}\n");
   }
   return path;
+}
+
+/** Opens settings.json in an editor tab (creating it if needed). */
+export async function openUserSettings() {
+  useWorkspace.getState().openFile(await ensureUserSettingsFile());
 }

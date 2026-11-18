@@ -64,6 +64,9 @@ export function parseWebviewTab(path: string): string | null {
   return path.startsWith(WEBVIEW_PREFIX) ? path.slice(WEBVIEW_PREFIX.length) : null;
 }
 
+/** The Settings page's tab. */
+export const SETTINGS_TAB = "settings:";
+
 const CUSTOM_PREFIX = "custom:";
 
 /** A tab showing `path` in an extension's custom editor (`viewType` has no colon). */
@@ -90,6 +93,7 @@ export function isVirtualTab(path: string): boolean {
     parseDiffTab(path) !== null ||
     parseCommitDiffTab(path) !== null ||
     parseWebviewTab(path) !== null ||
-    parseCustomEditorTab(path) !== null
+    parseCustomEditorTab(path) !== null ||
+    path === SETTINGS_TAB
   );
 }

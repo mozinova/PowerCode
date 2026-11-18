@@ -2,7 +2,7 @@
 
 import { ask } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, reopenWith, saveActive } from "./actions";
+import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, openSettings, reopenWith, saveActive } from "./actions";
 import { focusFindInFiles } from "./components/SearchView";
 import { saveModel } from "./editor/models";
 import { fetchAll, initRepository, pull, pushBranch } from "./git/actions";
@@ -16,7 +16,8 @@ import { debugRestart, debugStop, toggleBreakpointAtCursor, useDebug } from "./d
 import { notify } from "./state/notifications";
 import { setAutoSave, setAutoUpdateExtensions, useSettings } from "./state/settings";
 import { checkForUpdates, useExtensions } from "./extensions/runtime";
-import { openUserSettings, restartExtensionHost, showOutput } from "./exthost/host";
+import { restartExtensionHost, showOutput } from "./exthost/host";
+import { openUserSettings } from "./exthost/settings";
 import * as hostRpc from "./exthost/rpc";
 import { useExtensionHost } from "./exthost/state";
 import { useWorkspace, type ToolId } from "./state/workspace";
@@ -175,6 +176,7 @@ export const COMMANDS: Command[] = [
     },
   },
   { id: "preferences.theme", category: "Preferences", label: "Color Theme / File Icon Theme", run: () => showTool("extensions") },
+  { id: "preferences.settings", category: "Preferences", label: "Open Settings", shortcut: "Ctrl+,", run: () => openSettings() },
   { id: "preferences.settingsJson", category: "Preferences", label: "Open User Settings (JSON)", run: openUserSettings },
   { id: "window.maximize", category: "Window", label: "Toggle Maximize", run: () => getCurrentWindow().toggleMaximize() },
   { id: "window.minimize", category: "Window", label: "Minimize", run: () => getCurrentWindow().minimize() },

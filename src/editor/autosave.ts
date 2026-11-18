@@ -1,14 +1,16 @@
-//! Auto save, like VS Code's `files.autoSave: afterDelay`: a file is saved a
-//! second after its last edit (and when its tab closes, see `closeTabs`).
+//! Auto save, like VS Code's `files.autoSave: afterDelay`: a file is saved
+//! `files.autoSaveDelay` (1 s) after its last edit, and when its tab closes (see `closeTabs`).
 
 import { refreshGit } from "../git/store";
 import { errorMessage } from "../lib/ipc";
 import { notify } from "../state/notifications";
+import { setting } from "../settings/store";
 import { useSettings } from "../state/settings";
 import { isModelDirty, modelPath, saveModel } from "./models";
 import { monaco } from "./monaco";
 
-export const AUTO_SAVE_DELAY_MS = 1000;
+/** `files.autoSaveDelay`, as in VS Code. */
+const autoSaveDelay = () => Math.max(100, setting("files.autoSaveDelay", 1000));
 
 const timers = new Map<string, number>();
 /** Paths whose last auto save failed, so the error is reported once, not every second. */
@@ -35,7 +37,7 @@ function schedule(path: string) {
   window.clearTimeout(timers.get(path));
   timers.set(
     path,
-    window.setTimeout(() => void saveIfDirty(path), AUTO_SAVE_DELAY_MS),
+    window.setTimeout(() => void saveIfDirty(path), autoSaveDelay()),
   );
 }
 

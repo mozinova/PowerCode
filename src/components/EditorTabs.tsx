@@ -1,5 +1,5 @@
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import { Blocks, Columns2, Copy, ExternalLink, EllipsisVertical, X } from "lucide-react";
+import { Blocks, Columns2, Copy, ExternalLink, EllipsisVertical, Settings, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { closeTab, closeTabs, reopenWith } from "../actions";
 import { basename, isWithin, parentDir } from "../lib/paths";
@@ -13,6 +13,7 @@ import {
   parseExtensionTab,
   parseWebviewTab,
   tabFilePath,
+  SETTINGS_TAB,
 } from "../lib/virtualTabs";
 import { customEditorsFor } from "../exthost/customEditors";
 import { GIT_COLORS, gitStateOf, useGit } from "../git/store";
@@ -97,6 +98,7 @@ function TabIcon({ tab }: { tab: EditorTab }) {
   }
   const diffFile = parseDiffTab(tab.path) ?? parseCommitDiffTab(tab.path)?.file ?? parseCustomEditorTab(tab.path)?.path;
   if (diffFile) return <FileIcon name={basename(diffFile)} size={15} />;
+  if (tab.path === SETTINGS_TAB) return <Settings size={15} strokeWidth={1.75} className="shrink-0 text-fg-muted" />;
   return isVirtualTab(tab.path) ? (
     <Blocks size={15} strokeWidth={1.75} className="shrink-0 text-fg-muted" />
   ) : (

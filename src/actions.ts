@@ -3,7 +3,8 @@ import { disposeAllModels, disposeModel, moveModel, saveModel } from "./editor/m
 import { errorMessage, fsApi, remoteApi } from "./lib/ipc";
 import { basename, isWithin, movedPath } from "./lib/paths";
 import { remoteLabel, remoteOf } from "./lib/remote";
-import { customEditorTabPath, extensionTabPath, parseCustomEditorTab, parseDiffTab, tabFilePath } from "./lib/virtualTabs";
+import { SETTINGS_TAB, customEditorTabPath, extensionTabPath, parseCustomEditorTab, parseDiffTab, tabFilePath } from "./lib/virtualTabs";
+import { useSettingsPage } from "./settings/page";
 import { customEditorsFor, defaultTabFor, saveCustomEditorTab } from "./exthost/customEditors";
 import { showQuickPick } from "./exthost/dialogs";
 import { refreshGit } from "./git/store";
@@ -255,4 +256,10 @@ export async function reopenWith(tabPath: string, group?: number) {
   if (group !== undefined) workspace.focusGroup(group);
   workspace.openFile(target, basename(file));
   workspace.closeTab(tabPath, group);
+}
+
+/** Opens the Settings page, optionally searching for `query` (e.g. an extension's setting id). */
+export function openSettings(query?: string) {
+  useSettingsPage.setState(({ nonce }) => ({ query: query ?? "", nonce: nonce + 1 }));
+  useWorkspace.getState().openFile(SETTINGS_TAB, "Settings");
 }

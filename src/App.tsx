@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import { closeActiveTab, lastRoot, openFolder, saveActive } from "./actions";
+import { closeActiveTab, lastRoot, openFolder, openSettings, saveActive } from "./actions";
 import { MainToolbar, StatusBar } from "./components/Chrome";
 import { EditorArea } from "./components/EditorArea";
 import { CommitView } from "./components/CommitView";
@@ -23,6 +23,8 @@ import { WebviewLayer } from "./components/WebviewFrame";
 import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
 import { startExtensionHost } from "./exthost/host";
+import { watchIndentationSettings } from "./editor/options";
+import { loadUserSettings } from "./settings/store";
 import { startDebugging } from "./debug/launch";
 import { debugPause, debugRestart, debugStepInto, debugStepOut, debugStepOver, debugStop, toggleBreakpointAtCursor, useDebug } from "./debug/model";
 import { startGitWatcher } from "./git/store";
@@ -72,6 +74,7 @@ function useGlobalShortcuts() {
       let handled = true;
       if (ctrl && !e.shiftKey && e.key.toLowerCase() === "s") void saveActive();
       else if (ctrl && !e.shiftKey && e.key.toLowerCase() === "o") void openFolder();
+      else if (ctrl && !e.shiftKey && e.key === ",") openSettings();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "n") focusFileSearch();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "p") focusCommandPalette();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "f") focusFindInFiles();
@@ -122,6 +125,8 @@ export default function App() {
     // Runs once per app, not per (StrictMode) mount.
     if (initialized) return;
     initialized = true;
+    void loadUserSettings();
+    watchIndentationSettings();
     void initExtensions();
     startExtensionUpdates();
     startExtensionHost();
