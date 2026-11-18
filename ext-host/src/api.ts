@@ -679,8 +679,11 @@ function completeNamespace(name: string, namespace: Record<string, unknown>, mem
     warned.add(member);
     rpc.notify("log", { level: "warning", message: `vscode.${name}.${member} is not supported yet` });
   };
+  // Which members are only stand-ins (for diagnostics: `globalThis.__powercodeUnimplemented`).
+  const registry = ((globalThis as any).__powercodeUnimplemented ??= {}) as Record<string, string[]>;
   for (const [member, kind] of Object.entries(members)) {
     if (member in namespace) continue;
+    if (!(registry[name] ??= []).includes(member)) registry[name].push(member);
     let value: unknown;
     switch (kind) {
       case "event":
