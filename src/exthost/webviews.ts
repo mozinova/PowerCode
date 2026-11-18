@@ -7,6 +7,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { create } from "zustand";
 import { activeThemeColors } from "../editor/themes";
 import * as rpc from "./rpc";
+import { appendOutput, useExtensionHost } from "./state";
 
 export interface WebviewState {
   id: string;
@@ -129,8 +130,11 @@ kbd { background-color: var(--vscode-editorWidget-background); border: 1px solid
 ::-webkit-scrollbar-corner { background-color: transparent; }`;
 }
 
-/** The `acquireVsCodeApi` bridge, run before the page's own scripts (and its CSP). */
-function bootstrap(id: string): string {
+/**
+ * The `acquireVsCodeApi` bridge, run before the page's own scripts (and its CSP).
+ * Exported for tests.
+ */
+export function bootstrap(id: string): string {
   const state = JSON.stringify(savedStates.get(id) ?? null).replace(/</g, "\\u003c");
   return `(function () {
   var state = ${state};
@@ -146,6 +150,37 @@ function bootstrap(id: string): string {
     acquired = true;
     return api;
   };
+  // Messages from the extension arrive from PowerCode's window in an envelope and are
+  // delivered again from the page itself: as in VS Code, their origin is the webview's
+  // own (pages such as Codex drop messages from any other origin). The envelope stops
+  // here, so the page's listeners see each message once.
+  window.addEventListener("message", function (event) {
+    var data = event.data;
+    if (event.source !== window.parent || !data || data.__pcHostMessage !== true) return;
+    event.stopImmediatePropagation();
+    var origin = window.location.origin;
+    window.postMessage(data.message, origin && origin !== "null" ? origin : "*");
+  }, true);
+  // Errors go to PowerCode's Output ("Webviews"), as a webview has no visible console.
+  var describe = function (value) {
+    if (value instanceof Error) return value.stack || value.message;
+    if (typeof value === "string") return value;
+    try { return JSON.stringify(value); } catch (e) { return String(value); }
+  };
+  var report = function (level, parts) {
+    try { post({ type: "log", level: level, text: Array.prototype.map.call(parts, describe).join(" ").slice(0, 4000) }); } catch (e) {}
+  };
+  var consoleError = console.error;
+  console.error = function () { report("error", arguments); return consoleError.apply(console, arguments); };
+  window.addEventListener("error", function (event) {
+    var target = event.target;
+    if (target && target !== window && (target.src || target.href)) report("error", ["Failed to load " + (target.src || target.href)]);
+    else report("error", [event.error || event.message]);
+  }, true);
+  window.addEventListener("unhandledrejection", function (event) { report("error", ["Unhandled rejection:", event.reason]); });
+  document.addEventListener("securitypolicyviolation", function (event) {
+    report("warning", ["Blocked by the page's Content-Security-Policy (" + event.violatedDirective + "): " + (event.blockedURI || "inline")]);
+  });
   document.addEventListener("click", function (event) {
     var link = event.target && event.target.closest ? event.target.closest("a[href]") : null;
     if (!link) return;
@@ -264,10 +299,13 @@ export function attachFrame(id: string, frame: HTMLIFrameElement | null) {
   else if (frames.get(id)) frames.delete(id);
 }
 
+/** How messages travel to a webview's bridge (which delivers them with the page's own origin). */
+const envelope = (message: unknown) => ({ __pcHostMessage: true, message });
+
 export function postToWebview(id: string, message: unknown) {
   const frame = frames.get(id);
   if (frame?.contentWindow && ready.has(id)) {
-    frame.contentWindow.postMessage(message, "*");
+    frame.contentWindow.postMessage(envelope(message), "*");
     return;
   }
   queued.set(id, [...(queued.get(id) ?? []), message]);
@@ -278,7 +316,7 @@ function flushQueue(id: string) {
   const messages = queued.get(id);
   if (!frame?.contentWindow || !messages) return;
   queued.delete(id);
-  for (const message of messages) frame.contentWindow.postMessage(message, "*");
+  for (const message of messages) frame.contentWindow.postMessage(envelope(message), "*");
 }
 
 /** Runs `command:id?args` links like VS Code: args are a JSON value or array. */
@@ -295,6 +333,15 @@ function runCommandLink(href: string) {
     }
   }
   void rpc.request("commands/execute", { command: match[1], args }).catch(() => {});
+}
+
+/** A webview's errors, in the "Webviews" Output channel (tagged with its extension). */
+function logWebview(id: string, level: string, text: string) {
+  const extension = useWebviews.getState().webviews[id]?.extension ?? "webview";
+  useExtensionHost.setState(({ outputs }) =>
+    outputs.some((o) => o.id === "webviews") ? {} : { outputs: [...outputs, { id: "webviews", name: "Webviews", text: "" }] },
+  );
+  appendOutput("webviews", `[${new Date().toLocaleTimeString()}] [${level}] [${extension}] ${text}\n`);
 }
 
 let listening = false;
@@ -323,6 +370,9 @@ export function listenToWebviews() {
       case "link":
         if (data.href?.toLowerCase().startsWith("command:")) runCommandLink(data.href);
         else if (data.href) void openUrl(data.href);
+        break;
+      case "log":
+        logWebview(id, (data as { level?: string }).level ?? "error", (data as { text?: string }).text ?? "");
         break;
     }
   });
