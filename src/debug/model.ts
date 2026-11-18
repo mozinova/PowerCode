@@ -9,6 +9,7 @@ import { notify } from "../state/notifications";
 import { isVirtualTab } from "../lib/virtualTabs";
 import { useWorkspace } from "../state/workspace";
 import { newProgramTerminal } from "../terminal/sessions";
+import { remoteOf } from "../lib/remote";
 import {
   addBreakpoints,
   breakpointsIn,
@@ -469,10 +470,16 @@ export function registerDebugHandlers() {
   rpc.onNotification("debug/removeBreakpoints", ({ ids }) => removeBreakpoints(ids));
   rpc.onRequest("debug/runInTerminal", async (args: { cwd?: string; args: string[]; env?: Record<string, string | null>; title?: string }) => {
     const [command, ...rest] = args.args;
-    newProgramTerminal(args.cwd || useWorkspace.getState().root, args.title ?? "Debug", { command, args: rest, env: args.env ?? {} });
+    const cwd = args.cwd || useWorkspace.getState().root;
+    const session = newProgramTerminal(cwd, args.title ?? "Debug", { command, args: rest, env: args.env ?? {} });
     const { bottomTool, toggleBottomTool } = useWorkspace.getState();
     if (bottomTool !== "terminal") toggleBottomTool("terminal");
-    return {};
+    // The program's process id, for adapters that attach to it; on a remote it is ssh's or wsl's, so none.
+    const pid = await new Promise<number | null>((resolve) => {
+      session.onStart(resolve);
+      setTimeout(() => resolve(null), 5000);
+    });
+    return pid !== null && !remoteOf(cwd) ? { processId: pid } : {};
   });
 
   // Breakpoint edits reach every session as they happen.

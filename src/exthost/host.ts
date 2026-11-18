@@ -9,7 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { activeEditor } from "../components/EditorArea";
 import { monaco } from "../editor/monaco";
 import { fileUri } from "../editor/uris";
-import { isModelDirty, loadModel, modelPath, moveModel, onDidSaveModel, saveModel, setWillSaveParticipant } from "../editor/models";
+import { getModel, isModelDirty, loadModel, modelPath, moveModel, onDidSaveModel, saveModel, setWillSaveParticipant } from "../editor/models";
 import { runFileOperation, setFileOperationParticipant, type FileOperation } from "../lib/fileOperations";
 import { useExtensions } from "../extensions/runtime";
 import { activeThemeKind } from "../editor/themes";
@@ -42,7 +42,8 @@ import { track } from "../state/activity";
 import { ask, notify } from "../state/notifications";
 import { useTrust } from "../state/trust";
 import { openPaths, useWorkspace } from "../state/workspace";
-import { closeTerminal, newTerminal, setActiveTerminal, type TerminalSession } from "../terminal/sessions";
+import { newTerminal, setActiveTerminal, type TerminalSession } from "../terminal/sessions";
+import { registerTerminalHandlers, resetTerminals, syncTerminals } from "./terminals";
 import { cancelAllDialogs, showInputBox, showQuickPick } from "./dialogs";
 import { pathFromUri, registerProvider, resetLanguageFeatures, setDiagnostics, setDocumentFlusher, unregisterProvider } from "./languages";
 import * as rpc from "./rpc";
@@ -130,7 +131,7 @@ function forgetHostState() {
   lastTabs = "";
   progressEnds.forEach((end) => end());
   progressEnds.clear();
-  terminals.clear();
+  resetTerminals();
   useExtensionHost.setState({ statusItems: [], statusMessage: "", commands: [] });
   resetViews();
   resetDecorations();
@@ -219,6 +220,7 @@ async function start(key: string, extensions: InstalledExtension[], root: string
       useExtensionHost.setState({ commands: result.commands, status: "running" });
       for (const model of monaco.editor.getModels()) openDocument(model);
       sendTabs();
+      syncTerminals();
       sendActiveEditor();
       syncBreakpointsToHost();
       rpc.notify("start");
@@ -335,11 +337,23 @@ function closeDocument(uri: string) {
   rpc.notify("documents/close", { uri });
 }
 
+/** The document a tab shows as text (a file or an extension's document), if it is loaded. */
+function tabDocumentUri(path: string | null): string | null {
+  if (!path) return null;
+  const document = parseDocumentTab(path);
+  if (document) return monaco.editor.getModel(monaco.Uri.parse(document)) ? document : null;
+  if (isVirtualTab(path)) return null;
+  return getModel(path) ? fileUri(path).toString() : null;
+}
+
 function sendActiveEditor() {
   const editor = activeEditor();
   const model = editor?.getModel();
   const selection = editor?.getSelection();
   rpc.notify("editor/active", {
+    // `visibleTextEditors`: what each group shows, left to right.
+    visible: useWorkspace.getState().groups.map((g) => tabDocumentUri(g.activePath)),
+    activeIndex: useWorkspace.getState().groups.findIndex((g) => g.id === useWorkspace.getState().activeGroup),
     uri: model && (modelPath(model) !== undefined || isVirtualModel(model)) ? model.uri.toString() : null,
     selection: selection
       ? {
@@ -373,7 +387,6 @@ export function showOutput(id?: string) {
 }
 
 const progressEnds = new Map<number, () => void>();
-const terminals = new Map<number, TerminalSession>();
 
 function showTerminalPanel(session: TerminalSession) {
   setActiveTerminal(session);
@@ -742,19 +755,7 @@ function registerHandlers() {
     progressEnds.delete(id);
   });
 
-  rpc.onNotification("terminal/create", ({ id, name, cwd }) => {
-    terminals.set(id, newTerminal(cwd ? pathFromUri(cwd) : useWorkspace.getState().root, undefined, name));
-  });
-  rpc.onNotification("terminal/sendText", ({ id, text }) => terminals.get(id)?.sendText(text));
-  rpc.onNotification("terminal/show", ({ id }) => {
-    const session = terminals.get(id);
-    if (session) showTerminalPanel(session);
-  });
-  rpc.onNotification("terminal/dispose", ({ id }) => {
-    const session = terminals.get(id);
-    if (session) closeTerminal(session);
-    terminals.delete(id);
-  });
+  registerTerminalHandlers(rpc.onNotification);
 
   rpc.onNotification("languages/configuration", ({ language, configuration }) => {
     monaco.languages.setLanguageConfiguration(language, {
@@ -916,7 +917,8 @@ export function startExtensionHost() {
     activeTimer = window.setTimeout(() => rpc.isRunning() && sendActiveEditor(), 150);
   };
   useWorkspace.subscribe((s, previous) => {
-    if (s.activePath !== previous.activePath || s.activeGroup !== previous.activeGroup || s.cursor !== previous.cursor) {
+    // Groups too: another group's tab may change what is visible.
+    if (s.activePath !== previous.activePath || s.activeGroup !== previous.activeGroup || s.cursor !== previous.cursor || s.groups !== previous.groups) {
       activeChanged();
     }
     // Right away: extensions wait for the tab a command just opened (e.g. Claude Code's diffs).

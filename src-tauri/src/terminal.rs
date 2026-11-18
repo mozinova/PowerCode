@@ -25,7 +25,15 @@ pub struct Terminals {
 #[serde(tag = "event", content = "data", rename_all = "camelCase")]
 pub enum TerminalEvent {
     Output(String),
-    Exit,
+    /// The process's exit code, when the platform reports one.
+    Exit(Option<u32>),
+}
+
+/// A started terminal: its session id and the process id of its shell or program.
+#[derive(Serialize)]
+pub struct Spawned {
+    id: u32,
+    pid: Option<u32>,
 }
 
 /// The shell for a terminal opened in `cwd`: on the SSH host or in the WSL
@@ -138,8 +146,9 @@ pub fn terminal_spawn(
     cols: u16,
     rows: u16,
     program: Option<Program>,
+    env: Option<HashMap<String, Option<String>>>,
     on_event: Channel<TerminalEvent>,
-) -> CmdResult<u32> {
+) -> CmdResult<Spawned> {
     let pair = native_pty_system()
         .openpty(PtySize {
             rows,
@@ -155,8 +164,20 @@ pub fn terminal_spawn(
     };
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
+    // Variables an extension asked for (`createTerminal({ env })`); local shells only,
+    // remote ones get them through their program line.
+    let remote = cwd.as_deref().is_some_and(|c| crate::remote::parse(c).is_some() || crate::wsl::parse_share(c).is_some());
+    if !remote {
+        for (key, value) in env.unwrap_or_default() {
+            match value {
+                Some(value) => cmd.env(key, value),
+                None => cmd.env_remove(key),
+            }
+        }
+    }
 
     let mut child = pair.slave.spawn_command(cmd).map_err(err)?;
+    let pid = child.process_id();
     drop(pair.slave);
 
     let mut reader = pair.master.try_clone_reader().map_err(err)?;
@@ -194,14 +215,14 @@ pub fn terminal_spawn(
     // On Windows the ConPTY reader only ends once the master is dropped, so the
     // session is torn down when the child exits rather than on reader EOF.
     std::thread::spawn(move || {
-        let _ = child.wait();
+        let code = child.wait().ok().map(|status| status.exit_code());
         if let Ok(mut sessions) = app.state::<Terminals>().sessions.lock() {
             sessions.remove(&id);
         }
-        let _ = on_event.send(TerminalEvent::Exit);
+        let _ = on_event.send(TerminalEvent::Exit(code));
     });
 
-    Ok(id)
+    Ok(Spawned { id, pid })
 }
 
 #[tauri::command(async)]

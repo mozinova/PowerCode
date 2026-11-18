@@ -14,6 +14,7 @@ import * as views from "./views";
 import * as debug from "./debug";
 import * as files from "./files";
 import * as tabs from "./tabs";
+import * as terminals from "./terminals";
 import * as virtual from "./virtual";
 import { collectDefaults, host, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import { EventEmitter, ExtensionMode, Range, Uri } from "./types";
@@ -351,7 +352,9 @@ rpc.onNotification("documents/close", (params: { uri: string }) => {
   onDidClose.fire(document);
 });
 
-rpc.onNotification("editor/active", (params: { uri: string | null; selection?: any }) => hostEvents.setActiveEditor(params));
+rpc.onNotification("editor/active", (params: { uri: string | null; selection?: any; visible?: (string | null)[]; activeIndex?: number }) =>
+  hostEvents.setActiveEditor(params),
+);
 
 rpc.onNotification("configuration/changed", (params: { settings: Record<string, unknown> }) => {
   const before = host.settings;
@@ -380,6 +383,7 @@ debug.listen();
 virtual.listen();
 tabs.listen();
 files.listen();
+terminals.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

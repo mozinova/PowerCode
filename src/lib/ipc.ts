@@ -20,7 +20,8 @@ export const fsApi = {
   deletePath: (path: string) => invoke<void>("delete_path", { path }),
 };
 
-export type TerminalEvent = { event: "output"; data: string } | { event: "exit" };
+/** `exit` carries the exit code when the platform reports one. */
+export type TerminalEvent = { event: "output"; data: string } | { event: "exit"; data: number | null };
 
 export interface TerminalProfile {
   /** e.g. `powershell`, `git-bash`, `wsl:Ubuntu`. */
@@ -47,10 +48,20 @@ export const terminalApi = {
     rows: number,
     onEvent: (e: TerminalEvent) => void,
     program?: TerminalProgram,
+    /** Variables for a local shell (`null` removes one). */
+    env?: Record<string, string | null>,
   ) => {
     const channel = new Channel<TerminalEvent>();
     channel.onmessage = onEvent;
-    return invoke<number>("terminal_spawn", { cwd, profile, cols, rows, program: program ?? null, onEvent: channel });
+    return invoke<{ id: number; pid: number | null }>("terminal_spawn", {
+      cwd,
+      profile,
+      cols,
+      rows,
+      program: program ?? null,
+      env: env ?? null,
+      onEvent: channel,
+    });
   },
   profiles: () => invoke<TerminalProfile[]>("terminal_profiles"),
   write: (id: number, data: string) => invoke<void>("terminal_write", { id, data }),

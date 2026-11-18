@@ -17,6 +17,7 @@ import * as views from "./views";
 import * as decorations from "./decorations";
 import * as files from "./files";
 import * as tabs from "./tabs";
+import * as terminals from "./terminals";
 import * as virtual from "./virtual";
 import { SURFACE, TOP_LEVEL, type MemberKind } from "./surface";
 import { createDebugApi } from "./debug";
@@ -198,19 +199,47 @@ function textEditor(document: TextDocumentImpl, selections: Selection[]) {
   return editor;
 }
 
-function setActiveEditor(params: { uri: string | null; selection?: dto.RangeDto } | null) {
+/** The editors of every group showing a document, left to right (`visibleTextEditors`). */
+let visibleEditors: ReturnType<typeof textEditor>[] = [];
+
+const ORIGIN = () => new Selection(new Position(0, 0), new Position(0, 0));
+
+function setActiveEditor(
+  params: { uri: string | null; selection?: dto.RangeDto; visible?: (string | null)[]; activeIndex?: number } | null,
+) {
   const document = params?.uri ? documentFor(params.uri) : undefined;
   const selection = params?.selection
     ? new Selection(dto.toPosition(params.selection.start), dto.toPosition(params.selection.end))
-    : new Selection(new Position(0, 0), new Position(0, 0));
-  if (document && activeEditor?.document === document) {
+    : ORIGIN();
+  const list = params?.visible ?? (params?.uri ? [params.uri] : []);
+  const activeIndex = params?.activeIndex ?? 0;
+  // An editor keeps its identity while its group shows the same document.
+  const previousIn = (doc: TextDocumentImpl, index: number) =>
+    visibleEditors.find((e) => e.document === doc && e.viewColumn === index + 1);
+
+  const sameActive = !!document && activeEditor?.document === document;
+  if (sameActive) {
+    const moved = !activeEditor!.selection.isEqual(selection);
+    activeEditor!.selections = [selection];
+    if (moved) onDidChangeTextEditorSelection.fire({ textEditor: activeEditor, selections: [selection], kind: undefined });
+  } else if (document) {
+    activeEditor = previousIn(document, activeIndex) ?? textEditor(document, [selection]);
     activeEditor.selections = [selection];
-    onDidChangeTextEditorSelection.fire({ textEditor: activeEditor, selections: [selection], kind: undefined });
-    return;
+  } else {
+    activeEditor = undefined;
   }
-  activeEditor = document ? textEditor(document, [selection]) : undefined;
-  onDidChangeActiveTextEditor.fire(activeEditor);
-  onDidChangeVisibleTextEditors.fire(activeEditor ? [activeEditor] : []);
+
+  const visible = list.flatMap((uri, index) => {
+    const doc = uri ? documentFor(uri) : undefined;
+    if (!doc) return [];
+    const editor = index === activeIndex && activeEditor?.document === doc ? activeEditor : (previousIn(doc, index) ?? textEditor(doc, [ORIGIN()]));
+    editor.viewColumn = index + 1;
+    return [editor];
+  });
+  const visibleChanged = visible.length !== visibleEditors.length || visible.some((e, i) => e !== visibleEditors[i]);
+  visibleEditors = visible;
+  if (!sameActive) onDidChangeActiveTextEditor.fire(activeEditor);
+  if (visibleChanged) onDidChangeVisibleTextEditors.fire(visibleEditors);
 }
 
 // ---- Window -----------------------------------------------------------------
@@ -812,10 +841,13 @@ export function createApi(description: ExtensionDescription) {
         return activeEditor;
       },
       get visibleTextEditors() {
-        return activeEditor ? [activeEditor] : [];
+        return visibleEditors.length || !activeEditor ? visibleEditors : [activeEditor];
       },
       get terminals() {
-        return [];
+        return terminals.terminals();
+      },
+      get activeTerminal() {
+        return terminals.activeTerminal();
       },
       get activeColorTheme() {
         return { kind: host.colorThemeKind };
@@ -829,9 +861,10 @@ export function createApi(description: ExtensionDescription) {
       onDidChangeTextEditorOptions: never(),
       onDidChangeWindowState: never(),
       onDidChangeActiveColorTheme: onDidChangeColorTheme.event,
-      onDidOpenTerminal: never(),
-      onDidCloseTerminal: never(),
-      onDidChangeActiveTerminal: never(),
+      onDidOpenTerminal: terminals.onDidOpenTerminal.event,
+      onDidCloseTerminal: terminals.onDidCloseTerminal.event,
+      onDidChangeActiveTerminal: terminals.onDidChangeActiveTerminal.event,
+      onDidChangeTerminalState: terminals.onDidChangeTerminalState.event,
       showInformationMessage: (message: string, ...rest: any[]) => showMessage("info", message, ...rest),
       showWarningMessage: (message: string, ...rest: any[]) => showMessage("warning", message, ...rest),
       showErrorMessage: (message: string, ...rest: any[]) => showMessage("error", message, ...rest),
@@ -861,20 +894,7 @@ export function createApi(description: ExtensionDescription) {
         return file ? Uri.file(file) : undefined;
       },
       showWorkspaceFolderPick: async () => host.workspaceFolders[0],
-      createTerminal(nameOrOptions?: string | { name?: string; cwd?: string | Uri }) {
-        const options = typeof nameOrOptions === "string" ? { name: nameOrOptions } : nameOrOptions ?? {};
-        const id = `terminal#${nextOutput++}`;
-        const cwd = options.cwd ? (typeof options.cwd === "string" ? options.cwd : options.cwd.fsPath) : undefined;
-        rpc.notify("terminal/create", { id, name: options.name, cwd });
-        return {
-          name: options.name ?? "Terminal",
-          processId: Promise.resolve(undefined),
-          sendText: (text: string, addNewLine = true) => rpc.notify("terminal/sendText", { id, text: addNewLine ? `${text}\r` : text }),
-          show: () => rpc.notify("terminal/show", { id }),
-          hide: () => {},
-          dispose: () => rpc.notify("terminal/dispose", { id }),
-        };
-      },
+      createTerminal: terminals.createTerminal,
       createTextEditorDecorationType: (options: unknown) => decorations.createDecorationType(options),
       registerUriHandler: () => new Disposable(() => {}),
       registerTreeDataProvider(viewId: string, treeDataProvider: unknown) {
