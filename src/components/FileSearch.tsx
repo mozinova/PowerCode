@@ -4,7 +4,11 @@ import { openEditor } from "../actions";
 import { allCommands, recentCommands, runCommand, type Command } from "../commands";
 import { fsApi } from "../lib/ipc";
 import { track } from "../state/activity";
-import { basename, joinPath } from "../lib/paths";
+import { basename, isWithin, joinPath } from "../lib/paths";
+import { hasWorkspaceSymbolProviders, searchWorkspaceSymbols, type WorkspaceSymbol } from "../exthost/languages";
+
+/** `path` relative to the project folder, when inside it. */
+const relativePath = (path: string, root: string) => (isWithin(path, root) && path !== root ? path.slice(root.length + 1) : path);
 import { useWorkspace } from "../state/workspace";
 import { FileIcon } from "./FileIcon";
 
@@ -16,12 +20,26 @@ export function focusFileSearch() {
   document.getElementById(INPUT_ID)?.focus();
 }
 
-let showCommands: (() => void) | null = null;
+let showWithPrefix: ((prefix: string) => void) | null = null;
 
 /** Opens the command palette: the file search with a `>` prefix (Ctrl+Shift+P). */
 export function focusCommandPalette() {
-  showCommands?.();
+  showWithPrefix?.(">");
 }
+
+/** Go to Symbol in Workspace: the file search with a `#` prefix (Ctrl+T). */
+export function focusSymbolSearch() {
+  showWithPrefix?.("#");
+}
+
+/** `vscode.SymbolKind` names, by value. */
+const SYMBOL_KINDS = [
+  "file", "module", "namespace", "package", "class", "method", "property", "field", "constructor", "enum",
+  "interface", "function", "variable", "constant", "string", "number", "boolean", "array", "object", "key",
+  "null", "enum member", "struct", "event", "operator", "type parameter",
+];
+
+const SYMBOL_DELAY_MS = 200;
 
 interface CommandMatch {
   command: Command;
@@ -166,31 +184,52 @@ export function FileSearch() {
   }, [root]);
 
   useEffect(() => {
-    showCommands = () => {
-      setQuery(">");
+    showWithPrefix = (prefix) => {
+      setQuery(prefix);
       setOpen(true);
       inputRef.current?.focus();
     };
     return () => {
-      showCommands = null;
+      showWithPrefix = null;
     };
   }, []);
 
   /** A leading `>` turns the file search into the command palette, as in VS Code. */
   const commandMode = query.startsWith(">");
+  /** A leading `#` searches symbols in the workspace (from extensions' language servers). */
+  const symbolMode = query.startsWith("#");
   const commands = useMemo(
     () => (commandMode ? searchCommands(query.slice(1).trim()) : []),
     // Recomputed when opened, as availability depends on the app's state.
     [commandMode, query, open],
   );
 
-  const results = useMemo(
-    () => (!commandMode && files && query.trim() ? search(files, query.trim()) : []),
-    [commandMode, files, query],
-  );
-  const count = commandMode ? commands.length : results.length;
+  // Symbols come from the extension host, so they are fetched (debounced) rather than computed.
+  const [symbols, setSymbols] = useState<WorkspaceSymbol[] | null>([]);
+  useEffect(() => {
+    const term = query.slice(1).trim();
+    if (!symbolMode || !term) {
+      setSymbols([]);
+      return;
+    }
+    setSymbols(null);
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void searchWorkspaceSymbols(term).then((list) => !cancelled && setSymbols(list.slice(0, MAX_RESULTS)));
+    }, SYMBOL_DELAY_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [symbolMode, query]);
 
-  useEffect(() => setSelected(0), [results, commands]);
+  const results = useMemo(
+    () => (!commandMode && !symbolMode && files && query.trim() ? search(files, query.trim()) : []),
+    [commandMode, symbolMode, files, query],
+  );
+  const count = commandMode ? commands.length : symbolMode ? (symbols?.length ?? 0) : results.length;
+
+  useEffect(() => setSelected(0), [results, commands, symbols]);
 
   useEffect(() => {
     listRef.current
@@ -207,6 +246,15 @@ export function FileSearch() {
   const choose = (match: Match | undefined) => {
     if (!match || !root) return;
     openEditor(joinPath(root, match.relative));
+    dismiss();
+  };
+
+  const chooseSymbol = (symbol: WorkspaceSymbol | undefined) => {
+    if (!symbol) return;
+    const { openFile, openFileAt } = useWorkspace.getState();
+    const r = symbol.range;
+    if (r) openFileAt(symbol.path, r.start.line + 1, r.start.character + 1, r.start.character + 1);
+    else openFile(symbol.path);
     dismiss();
   };
 
@@ -227,6 +275,7 @@ export function FileSearch() {
         break;
       case "Enter":
         if (commandMode) execute(commands[selected]);
+        else if (symbolMode) chooseSymbol(symbols?.[selected]);
         else choose(results[selected]);
         break;
       case "Escape":
@@ -261,17 +310,17 @@ export function FileSearch() {
           onKeyDown={onKeyDown}
           placeholder={
             root
-              ? `Search files by name at ${basename(root)}  (> for commands)`
+              ? `Search files by name at ${basename(root)}  (> commands, # symbols)`
               : "Type > for commands, or open a folder to search files"
           }
           spellCheck={false}
           autoComplete="off"
           className="h-full min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-subtle"
         />
-        {open && query && !commandMode && root && files === null ? (
+        {open && query && !commandMode && root && (symbolMode ? symbols === null : files === null) ? (
           <Loader2 size={14} className="shrink-0 animate-spin text-fg-muted" />
         ) : (
-          <span className="shrink-0 text-xs text-fg-subtle">{commandMode ? "Ctrl+Shift+P" : "Ctrl+Shift+N"}</span>
+          <span className="shrink-0 text-xs text-fg-subtle">{commandMode ? "Ctrl+Shift+P" : symbolMode ? "Ctrl+T" : "Ctrl+Shift+N"}</span>
         )}
       </div>
 
@@ -308,13 +357,57 @@ export function FileSearch() {
         </div>
       )}
 
+      {open && symbolMode && root && (
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-label="Symbols"
+          onMouseDown={(e) => e.preventDefault()}
+          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-[420px] overflow-y-auto rounded-lg border border-line-soft bg-panel p-1 shadow-xl shadow-black/40"
+        >
+          {!query.slice(1).trim() && (
+            <div className="px-2.5 py-1.5 text-fg-muted">
+              {hasWorkspaceSymbolProviders()
+                ? "Type a symbol name (class, function, …)"
+                : "No extension provides workspace symbols for this project yet."}
+            </div>
+          )}
+          {query.slice(1).trim() && symbols?.length === 0 && <div className="px-2.5 py-1.5 text-fg-muted">No matching symbols</div>}
+          {(symbols ?? []).map((symbol, i) => {
+            const term = query.slice(1).trim();
+            const indices = new Set(fuzzyMatch(term, symbol.name)?.indices ?? []);
+            const where = relativePath(symbol.path, root);
+            return (
+              <div
+                key={`${symbol.path}:${symbol.range?.start.line ?? 0}:${symbol.name}:${i}`}
+                data-index={i}
+                role="option"
+                aria-selected={i === selected}
+                onMouseMove={() => setSelected(i)}
+                onClick={() => chooseSymbol(symbol)}
+                className={`flex h-7 cursor-default items-center gap-2 rounded px-2.5 whitespace-nowrap ${
+                  i === selected ? "bg-selected" : ""
+                }`}
+              >
+                <span className="w-16 shrink-0 truncate text-xs text-fg-subtle">{SYMBOL_KINDS[symbol.kind] ?? "symbol"}</span>
+                <span className="shrink-0">
+                  <Highlighted text={symbol.name} indices={indices} />
+                </span>
+                {symbol.containerName && <span className="shrink-0 text-fg-muted">{symbol.containerName}</span>}
+                <span className="min-w-0 truncate text-fg-subtle">{where}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {open && !commandMode && query.trim() && !root && (
         <div className="absolute top-full right-0 left-0 z-50 mt-1 rounded-lg border border-line-soft bg-panel px-3 py-2 text-fg-muted shadow-xl shadow-black/40">
           Open a folder to search files, or type <span className="font-code text-fg">&gt;</span> for commands.
         </div>
       )}
 
-      {open && !commandMode && query.trim() && files !== null && (
+      {open && !commandMode && !symbolMode && query.trim() && files !== null && (
         <div
           ref={listRef}
           role="listbox"

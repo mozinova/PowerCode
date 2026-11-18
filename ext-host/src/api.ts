@@ -1015,16 +1015,18 @@ export function createApi(description: ExtensionDescription) {
       registerFoldingRangeProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("foldingRanges", extensionId, s, p),
       registerDocumentLinkProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("documentLinks", extensionId, s, p),
       registerInlayHintsProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("inlayHints", extensionId, s, p),
-      // Not bridged yet: accepted so extensions keep working.
+      registerColorProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("colors", extensionId, s, p),
+      registerSelectionRangeProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("selectionRanges", extensionId, s, p),
+      registerLinkedEditingRangeProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("linkedEditing", extensionId, s, p),
+      registerInlineCompletionItemProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("inlineCompletions", extensionId, s, p),
+      // Not tied to documents: the UI asks every one of them (Go to Symbol in Workspace).
+      registerWorkspaceSymbolProvider: (p: unknown) => providers.register("workspaceSymbols", extensionId, "*", p),
+      // Not bridged yet: accepted so extensions keep working. Semantic tokens would
+      // clash with the TextMate colouring, which uses Monaco's semantic tokens.
       registerDocumentSemanticTokensProvider: () => new Disposable(() => {}),
       registerDocumentRangeSemanticTokensProvider: () => new Disposable(() => {}),
-      registerColorProvider: () => new Disposable(() => {}),
-      registerSelectionRangeProvider: () => new Disposable(() => {}),
       registerCallHierarchyProvider: () => new Disposable(() => {}),
       registerTypeHierarchyProvider: () => new Disposable(() => {}),
-      registerLinkedEditingRangeProvider: () => new Disposable(() => {}),
-      registerInlineCompletionItemProvider: () => new Disposable(() => {}),
-      registerWorkspaceSymbolProvider: () => new Disposable(() => {}),
       registerEvaluatableExpressionProvider: () => new Disposable(() => {}),
       registerInlineValuesProvider: () => new Disposable(() => {}),
       registerDocumentDropEditProvider: () => new Disposable(() => {}),

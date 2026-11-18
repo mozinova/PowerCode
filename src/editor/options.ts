@@ -32,6 +32,10 @@ export function editorOptions(values: Values = useUserSettings.getState().values
     smoothScrolling: s("editor.smoothScrolling", true),
     cursorBlinking: s("editor.cursorBlinking", "blink") as monaco.editor.IEditorOptions["cursorBlinking"],
     cursorStyle: s("editor.cursorStyle", "line") as monaco.editor.IEditorOptions["cursorStyle"],
+    // Extensions' features: ghost text completions, matching tag renames, colour swatches.
+    inlineSuggest: { enabled: s("editor.inlineSuggest.enabled", true) },
+    linkedEditing: s("editor.linkedEditing", false),
+    colorDecorators: s("editor.colorDecorators", true),
   };
 }
 

@@ -6,7 +6,7 @@ import { MainToolbar, StatusBar } from "./components/Chrome";
 import { EditorArea } from "./components/EditorArea";
 import { CommitView } from "./components/CommitView";
 import { ExtensionsView } from "./components/ExtensionsView";
-import { focusCommandPalette, focusFileSearch } from "./components/FileSearch";
+import { focusCommandPalette, focusFileSearch, focusSymbolSearch } from "./components/FileSearch";
 import { ProjectView } from "./components/ProjectView";
 import { RemoteFolderPicker } from "./components/RemoteFolderPicker";
 import { RemoteView } from "./components/RemoteView";
@@ -79,6 +79,7 @@ function useGlobalShortcuts() {
       else if (ctrl && !e.shiftKey && e.key === ",") openSettings();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "n") focusFileSearch();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "p") focusCommandPalette();
+      else if (ctrl && !e.shiftKey && e.key.toLowerCase() === "t") focusSymbolSearch();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "f") focusFindInFiles();
       else if (e.altKey && !ctrl && e.code === "Digit0") toggleTool("commit");
       else if (e.altKey && !ctrl && e.code === "Digit9") toggleTool("commit");

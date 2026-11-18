@@ -8,12 +8,15 @@ import {
   CancellationTokenSource,
   CodeActionKind,
   CodeActionTriggerKind,
+  Color,
   CompletionItem,
   CompletionTriggerKind,
   Diagnostic,
   Disposable,
+  InlineCompletionTriggerKind,
   Range,
   SignatureHelpTriggerKind,
+  SnippetString,
 } from "./types";
 
 export type DocumentSelector =
@@ -75,9 +78,20 @@ async function provide(params: any) {
   const registration = registrations.get(params.handle);
   if (!registration) return null;
   const { provider } = registration;
+  const token = new CancellationTokenSource().token;
+  if (params.method === "workspaceSymbols") {
+    const symbols = (await provider.provideWorkspaceSymbols(params.query ?? "", token)) ?? [];
+    return symbols.map((s: any) => ({
+      name: s.name,
+      kind: s.kind,
+      containerName: s.containerName || undefined,
+      uri: s.location?.uri?.toString(),
+      // Symbols may come without a range (to resolve later): the file's start then.
+      range: s.location?.range ? dto.range(s.location.range) : undefined,
+    }));
+  }
   const document = documentFor(params.uri);
   if (!document) return null;
-  const token = new CancellationTokenSource().token;
   const position = params.position ? dto.toPosition(params.position) : undefined;
   const range = params.range ? dto.toRange(params.range) : undefined;
 
@@ -199,6 +213,56 @@ async function provide(params: any) {
         paddingLeft: h.paddingLeft,
         paddingRight: h.paddingRight,
         tooltip: dto.markdown(h.tooltip),
+      }));
+    }
+    case "inlineCompletions": {
+      const result = await provider.provideInlineCompletionItems(document, position, {
+        // Monaco: Automatic = 0, Explicit = 1; the API: Invoke = 0, Automatic = 1.
+        triggerKind: params.explicit ? InlineCompletionTriggerKind.Invoke : InlineCompletionTriggerKind.Automatic,
+        selectedCompletionInfo: params.selected
+          ? { range: dto.toRange(params.selected.range), text: params.selected.text }
+          : undefined,
+      }, token);
+      const items = (Array.isArray(result) ? result : result?.items) ?? [];
+      return items.map((item: any) => ({
+        insertText: item.insertText instanceof SnippetString ? undefined : String(item.insertText ?? ""),
+        snippet: item.insertText instanceof SnippetString ? item.insertText.value : undefined,
+        filterText: item.filterText,
+        range: item.range ? dto.range(item.range) : undefined,
+        command: dto.command(item.command),
+      }));
+    }
+    case "selectionRanges": {
+      const positions = (params.positions ?? []).map(dto.toPosition);
+      const ranges = (await provider.provideSelectionRanges(document, positions, token)) ?? [];
+      // Each position's chain, innermost first.
+      return ranges.map((r: any) => {
+        const chain: dto.RangeDto[] = [];
+        for (let current = r; current; current = current.parent) chain.push(dto.range(current.range));
+        return chain;
+      });
+    }
+    case "linkedEditing": {
+      const result = await provider.provideLinkedEditingRanges(document, position, token);
+      if (!result) return null;
+      const pattern = result.wordPattern as RegExp | undefined;
+      return { ranges: result.ranges.map(dto.range), wordPattern: pattern ? { source: pattern.source, flags: pattern.flags } : undefined };
+    }
+    case "colors": {
+      const colors = (await provider.provideDocumentColors(document, token)) ?? [];
+      return colors.map((c: any) => ({
+        range: dto.range(c.range),
+        color: { red: c.color.red, green: c.color.green, blue: c.color.blue, alpha: c.color.alpha },
+      }));
+    }
+    case "colorPresentations": {
+      const c = params.color;
+      const presentations =
+        (await provider.provideColorPresentations(new Color(c.red, c.green, c.blue, c.alpha), { document, range }, token)) ?? [];
+      return presentations.map((p: any) => ({
+        label: p.label,
+        textEdit: p.textEdit ? dto.textEdit(p.textEdit) : undefined,
+        additionalTextEdits: p.additionalTextEdits?.map(dto.textEdit),
       }));
     }
     default:

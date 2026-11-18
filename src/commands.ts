@@ -4,6 +4,7 @@ import { ask } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, openSettings, pickAndInstallVsix, reopenWith, saveActive } from "./actions";
 import { focusFindInFiles } from "./components/SearchView";
+import { focusSymbolSearch } from "./components/FileSearch";
 import { saveModel } from "./editor/models";
 import { fetchAll, initRepository, pull, pushBranch } from "./git/actions";
 import { useGit } from "./git/store";
@@ -107,6 +108,7 @@ export const COMMANDS: Command[] = [
   { id: "view.project", category: "View", label: "Show Project", shortcut: "Alt+1", run: () => showTool("project") },
   { id: "view.commit", category: "View", label: "Show Commit", shortcut: "Alt+0", run: () => showTool("commit") },
   { id: "view.search", category: "View", label: "Find in Files", shortcut: "Ctrl+Shift+F", run: focusFindInFiles },
+  { id: "go.symbol", category: "Go", label: "Go to Symbol in Workspace…", shortcut: "Ctrl+T", when: hasFolder, run: () => focusSymbolSearch() },
   { id: "view.remote", category: "View", label: "Show Remote Hosts", run: () => showTool("remote") },
   { id: "view.extensions", category: "View", label: "Show Extensions", shortcut: "Alt+2", run: () => showTool("extensions") },
   {

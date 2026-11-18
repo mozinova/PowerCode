@@ -357,12 +357,107 @@ function createProvider(r: Registration, language: string): monaco.IDisposable |
           };
         },
       });
+    case "inlineCompletions":
+      return l.registerInlineCompletionsProvider(language, {
+        async provideInlineCompletions(model, position, context, token) {
+          const selected = context.selectedSuggestionInfo;
+          const items = await provide<any[]>(handle, "inlineCompletions", model, {
+            position: toPosition(position),
+            explicit: context.triggerKind === l.InlineCompletionTriggerKind.Explicit,
+            selected: selected ? { range: fromRange(selected.range), text: selected.text } : undefined,
+          });
+          // Typing on made the answer stale.
+          if (token.isCancellationRequested) return { items: [] };
+          return {
+            items: (items ?? []).map((item) => ({
+              insertText: item.snippet !== undefined ? { snippet: item.snippet } : item.insertText,
+              filterText: item.filterText,
+              range: item.range ? toRange(item.range) : undefined,
+              command: command(item.command),
+            })),
+          };
+        },
+        disposeInlineCompletions() {},
+      });
+    case "selectionRanges":
+      return l.registerSelectionRangeProvider(language, {
+        async provideSelectionRanges(model, positions) {
+          const chains = await provide<RangeDto[][]>(handle, "selectionRanges", model, { positions: positions.map(toPosition) });
+          return (chains ?? []).map((chain) => chain.map((range) => ({ range: toRange(range) })));
+        },
+      });
+    case "linkedEditing":
+      return l.registerLinkedEditingRangeProvider(language, {
+        async provideLinkedEditingRanges(model, position) {
+          const result = await provide<any>(handle, "linkedEditing", model, { position: toPosition(position) });
+          if (!result) return null;
+          const pattern = result.wordPattern;
+          return { ranges: result.ranges.map(toRange), wordPattern: pattern ? revive(pattern) : undefined };
+        },
+      });
+    case "colors":
+      return l.registerColorProvider(language, {
+        async provideDocumentColors(model) {
+          const colors = await provide<any[]>(handle, "colors", model);
+          return (colors ?? []).map((c) => ({ range: toRange(c.range), color: c.color }));
+        },
+        async provideColorPresentations(model, info) {
+          const presentations = await provide<any[]>(handle, "colorPresentations", model, { range: fromRange(info.range), color: info.color });
+          return (presentations ?? []).map((p) => ({
+            label: p.label,
+            textEdit: p.textEdit ? { range: toRange(p.textEdit.range), text: p.textEdit.newText } : undefined,
+            additionalTextEdits: p.additionalTextEdits?.map((e: any) => ({ range: toRange(e.range), text: e.newText })),
+          }));
+        },
+      });
     default:
       return null;
   }
 }
 
+function revive(pattern: { source: string; flags?: string }) {
+  try {
+    return new RegExp(pattern.source, pattern.flags);
+  } catch {
+    return undefined;
+  }
+}
+
+// ---- Workspace symbols ---------------------------------------------------------------
+
+/** Workspace symbol providers: not tied to a language, so not registered with Monaco. */
+const workspaceSymbolProviders = new Set<number>();
+
+export interface WorkspaceSymbol {
+  name: string;
+  /** `vscode.SymbolKind`. */
+  kind: number;
+  containerName?: string;
+  path: string;
+  range?: RangeDto;
+}
+
+export const hasWorkspaceSymbolProviders = () => workspaceSymbolProviders.size > 0;
+
+/** Go to Symbol in Workspace: every provider's symbols for `query` (files only). */
+export async function searchWorkspaceSymbols(query: string): Promise<WorkspaceSymbol[]> {
+  const results = await Promise.all(
+    [...workspaceSymbolProviders].map((handle) =>
+      rpc.request<any[]>("providers/provide", { handle, method: "workspaceSymbols", query }).catch(() => null),
+    ),
+  );
+  return results
+    .flatMap((list) => list ?? [])
+    .filter((s) => typeof s.uri === "string" && /^(file|ssh):/.test(s.uri))
+    .map((s) => ({ name: s.name, kind: s.kind, containerName: s.containerName, path: pathFromUri(s.uri), range: s.range }));
+}
+
 export function registerProvider(r: Registration) {
+  if (r.kind === "workspaceSymbols") {
+    workspaceSymbolProviders.add(r.handle);
+    registrations.set(r.handle, [{ dispose: () => workspaceSymbolProviders.delete(r.handle) }]);
+    return;
+  }
   // `*` applies to every language: Monaco's selector accepts it too.
   const disposables = r.languages
     .map((language) => createProvider(r, language))

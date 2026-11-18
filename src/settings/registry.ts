@@ -129,6 +129,9 @@ export const BUILTIN_SECTIONS: SettingsSection[] = [
       { key: "editor.bracketPairColorization.enabled", group: "Editor › Bracket Pair Colorization", title: "Enabled", description: "Colors matching brackets alike.", type: "boolean", default: true },
       { key: "editor.guides.indentation", group: "Editor › Guides", title: "Indentation", description: "Shows indentation guides.", type: "boolean", default: true },
       { key: "editor.smoothScrolling", group: "Editor", title: "Smooth Scrolling", description: "Animates scrolling.", type: "boolean", default: true },
+      { key: "editor.inlineSuggest.enabled", group: "Editor › Inline Suggest", title: "Enabled", description: "Shows inline suggestions from extensions as ghost text while typing (Tab accepts).", type: "boolean", default: true },
+      { key: "editor.linkedEditing", group: "Editor", title: "Linked Editing", description: "Renames matching ranges together while typing, e.g. an HTML tag's opening and closing names.", type: "boolean", default: false },
+      { key: "editor.colorDecorators", group: "Editor", title: "Color Decorators", description: "Shows color swatches (with a picker) next to colors that extensions find.", type: "boolean", default: true },
       {
         key: "editor.cursorBlinking",
         group: "Editor",
