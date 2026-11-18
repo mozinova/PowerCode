@@ -23,8 +23,10 @@ fn git_command(cwd: &str) -> Command {
         }
         cmd
     };
+    // `--no-optional-locks`: the status PowerCode polls must not take `.git/index.lock`,
+    // or a `pull` (here or in a terminal) running at that moment fails (as in VS Code).
     // Report non-ASCII paths verbatim instead of quoting them.
-    cmd.args(["-c", "core.quotepath=false"])
+    cmd.args(["--no-optional-locks", "-c", "core.quotepath=false"])
         // Never block waiting for a password on a terminal nobody sees.
         .env("GIT_TERMINAL_PROMPT", "0");
     cmd
@@ -40,7 +42,7 @@ pub(crate) fn ssh_git_script(dir: &str, args: &[String]) -> String {
     format!(
         concat!(
             "(cd -- {dir} || exit 1; err=$(mktemp) || exit 1; ",
-            "GIT_TERMINAL_PROMPT=0 git -c core.quotepath=false {args} 2>\"$err\"; rc=$?; ",
+            "GIT_TERMINAL_PROMPT=0 git --no-optional-locks -c core.quotepath=false {args} 2>\"$err\"; rc=$?; ",
             "if [ $rc -ne 0 ]; then cat \"$err\"; fi; rm -f \"$err\"; exit $rc)"
         ),
         dir = quote(dir),
@@ -570,6 +572,43 @@ pub async fn git_show_at(root: String, revision: String, path: String) -> CmdRes
     .map_err(err)?
 }
 
+/// A lock younger than this may belong to a git command still running.
+const LOCK_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Removes `.git/index.lock` left behind by an interrupted git command ("Another git
+/// process seems to be running"). Returns false when there is none; refuses a lock
+/// so recent that a git command may still be working.
+#[tauri::command]
+pub async fn git_remove_index_lock(root: String) -> CmdResult<bool> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let git_dir = run(&root, &["rev-parse", "--absolute-git-dir"])?.trim().to_string();
+        if let Some((host, _)) = crate::remote::parse(&root) {
+            let lock = format!("{git_dir}/index.lock");
+            let script = format!(
+                "if [ -e {lock} ]; then rm -f {lock} && echo removed; fi",
+                lock = crate::remote::quote(&lock)
+            );
+            let output = crate::remote::shared().exec_blocking(host, &script)?;
+            return Ok(String::from_utf8_lossy(&output).contains("removed"));
+        }
+        // Git inside WSL answers with a Linux path; it is removed through the share.
+        let git_dir = match crate::wsl::parse_share(&root) {
+            Some((distro, _)) => crate::wsl::to_share(&distro, &git_dir),
+            None => native(&git_dir),
+        };
+        let lock = Path::new(&git_dir).join("index.lock");
+        let Ok(metadata) = std::fs::metadata(&lock) else { return Ok(false) };
+        let age = metadata.modified().ok().and_then(|m| m.elapsed().ok()).unwrap_or_default();
+        if age < LOCK_GRACE {
+            return Err("A git command is working in this repository right now. Try again when it finishes.".into());
+        }
+        std::fs::remove_file(&lock).map_err(err)?;
+        Ok(true)
+    })
+    .await
+    .map_err(err)?
+}
+
 /// Checks out a commit without a branch (detached HEAD).
 #[tauri::command]
 pub async fn git_checkout_revision(root: String, hash: String) -> CmdResult<String> {
@@ -580,6 +619,36 @@ pub async fn git_checkout_revision(root: String, hash: String) -> CmdResult<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removes_only_stale_index_locks() {
+        if Command::new("git").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("powercode-lock-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().into_owned();
+        run(&root, &["init", "-q"]).unwrap();
+        let lock = dir.join(".git").join("index.lock");
+        let remove = |root: &str| tauri::async_runtime::block_on(git_remove_index_lock(root.to_string()));
+
+        assert_eq!(remove(&root), Ok(false), "no lock, nothing to do");
+        std::fs::write(&lock, "").unwrap();
+        assert!(remove(&root).is_err(), "a fresh lock may belong to a running command");
+        assert!(lock.exists());
+        // An old lock (as after an interrupted command) goes.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+        std::fs::File::options().write(true).open(&lock).unwrap().set_modified(old).unwrap();
+        assert_eq!(remove(&root), Ok(true));
+        assert!(!lock.exists());
+        // Status with optional locks off never creates one.
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        run(&root, &["status", "--porcelain"]).unwrap();
+        assert!(!lock.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn parses_porcelain_v2() {

@@ -55,11 +55,15 @@ export function notify(kind: NotificationKind, title: string, message?: string):
   return id;
 }
 
-/** Shows `title…` while `task` runs, then its success or error. */
+/**
+ * Shows `title…` while `task` runs, then its success or error. `onError` may
+ * report an error itself (e.g. with a fix to offer); it returns whether it did.
+ */
 export async function withProgress<T>(
   title: string,
   task: () => Promise<T>,
   done?: (result: T) => { title: string; message?: string } | null,
+  onError?: (title: string, message: string) => boolean,
 ): Promise<T | undefined> {
   const progress = notify("progress", `${title}…`);
   try {
@@ -70,7 +74,8 @@ export async function withProgress<T>(
     return result;
   } catch (e) {
     dismiss(progress);
-    notify("error", `${title} failed`, e instanceof Error ? e.message : String(e));
+    const message = e instanceof Error ? e.message : String(e);
+    if (!onError?.(`${title} failed`, message)) notify("error", `${title} failed`, message);
     return undefined;
   }
 }

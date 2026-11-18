@@ -260,6 +260,8 @@ export interface CommitDetails {
 
 export const gitApi = {
   status: (root: string) => invoke<GitStatus>("git_status", { root }),
+  /** Removes a stale `.git/index.lock`; false when there was none. */
+  removeIndexLock: (root: string) => invoke<boolean>("git_remove_index_lock", { root }),
   /** The file's content at HEAD, or null if it is not committed. */
   showHead: (root: string, path: string) => invoke<string | null>("git_show_head", { root, path }),
   stage: (root: string, paths: string[]) => invoke<string>("git_stage", { root, paths }),

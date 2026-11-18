@@ -3,7 +3,7 @@ import { reloadCleanModels } from "../editor/models";
 import { fsApi, gitApi, type GitFile } from "../lib/ipc";
 import { basename } from "../lib/paths";
 import { commitDiffTabPath, commitDiffTabTitle, diffTabPath, diffTabTitle } from "../lib/virtualTabs";
-import { notify, withProgress } from "../state/notifications";
+import { ask as askInBalloon, notify, withProgress } from "../state/notifications";
 import { useWorkspace } from "../state/workspace";
 import { refreshGit, useGit } from "./store";
 
@@ -11,6 +11,33 @@ function root(): string {
   const root = useWorkspace.getState().root;
   if (!root) throw new Error("No folder is open.");
   return root;
+}
+
+/**
+ * Git refuses to work while `.git/index.lock` exists; an interrupted git command
+ * (or editor) can leave it behind. The error then offers to remove it.
+ */
+function offerLockRemoval(title: string, message: string): boolean {
+  if (!/index\.lock/.test(message) || !/exists/i.test(message)) return false;
+  const repo = useWorkspace.getState().root;
+  void askInBalloon("error", title, `${message}
+
+If no other git command is running (in a terminal or another app), the lock file was left behind and can be removed.`, ["Remove Lock File"]).then(async (choice) => {
+    if (choice !== 0 || !repo) return;
+    try {
+      const removed = await gitApi.removeIndexLock(repo);
+      notify("success", removed ? "Lock file removed" : "The lock file is already gone", "Run the git command again.");
+      await refreshGit();
+    } catch (e) {
+      notify("error", "Could not remove the lock file", e instanceof Error ? e.message : String(e));
+    }
+  });
+  return true;
+}
+
+/** `withProgress` for git commands, with the lock file fix offered on that error. */
+function gitProgress<T>(title: string, task: () => Promise<T>, done?: (result: T) => { title: string; message?: string } | null) {
+  return withProgress(title, task, done, offerLockRemoval);
 }
 
 /** After git rewrote files on disk: reload open files, the tree and the status. */
@@ -26,13 +53,13 @@ export function openDiff(path: string) {
 
 export async function stage(paths: string[]) {
   if (paths.length === 0) return;
-  await withProgress("Stage", () => gitApi.stage(root(), paths));
+  await gitProgress("Stage", () => gitApi.stage(root(), paths));
   await refreshGit();
 }
 
 export async function unstage(paths: string[]) {
   if (paths.length === 0) return;
-  await withProgress("Unstage", () => gitApi.unstage(root(), paths));
+  await gitProgress("Unstage", () => gitApi.unstage(root(), paths));
   await refreshGit();
 }
 
@@ -49,7 +76,7 @@ export async function rollback(files: GitFile[]) {
   if (!confirmed) return;
   const tracked = files.filter((f) => !f.untracked).map((f) => f.path);
   const untracked = files.filter((f) => f.untracked).map((f) => f.path);
-  await withProgress("Rollback", async () => {
+  await gitProgress("Rollback", async () => {
     if (tracked.length) await gitApi.discard(root(), tracked);
     for (const path of untracked) await fsApi.deletePath(path);
   });
@@ -79,7 +106,7 @@ export async function commit(message: string, amend: boolean, after: AfterCommit
     await gitApi.stage(root(), changed.map((f) => f.path));
   }
 
-  const committed = await withProgress(
+  const committed = await gitProgress(
     amend ? "Amend commit" : "Commit",
     () => gitApi.commit(root(), message, amend),
     () => ({ title: amend ? "Commit amended" : "Committed", message: message.split("\n")[0] }),
@@ -92,12 +119,12 @@ export async function commit(message: string, amend: boolean, after: AfterCommit
 }
 
 export async function pushBranch() {
-  await withProgress("Push", () => gitApi.push(root()), () => ({ title: "Pushed" }));
+  await gitProgress("Push", () => gitApi.push(root()), () => ({ title: "Pushed" }));
   await refreshGit();
 }
 
 export async function pull() {
-  await withProgress("Update project", () => gitApi.pull(root()), (out) => ({
+  await gitProgress("Update project", () => gitApi.pull(root()), (out) => ({
     title: "Project updated",
     message: out.trim() || undefined,
   }));
@@ -105,12 +132,12 @@ export async function pull() {
 }
 
 export async function fetchAll() {
-  await withProgress("Fetch", () => gitApi.fetch(root()), () => ({ title: "Fetched" }));
+  await gitProgress("Fetch", () => gitApi.fetch(root()), () => ({ title: "Fetched" }));
   await refreshGit();
 }
 
 export async function checkout(branch: string, remote: boolean) {
-  await withProgress(`Checkout ${branch}`, () => gitApi.checkout(root(), branch, remote), () => ({
+  await gitProgress(`Checkout ${branch}`, () => gitApi.checkout(root(), branch, remote), () => ({
     title: `Checked out ${remote ? branch.slice(branch.indexOf("/") + 1) : branch}`,
   }));
   await afterWorkingTreeChange();
@@ -129,7 +156,7 @@ export function openCommitDiff(hash: string, path: string) {
 
 /** Checks out a commit with a detached HEAD. */
 export async function checkoutRevision(hash: string) {
-  await withProgress(`Checkout ${hash.slice(0, 8)}`, () => gitApi.checkoutRevision(root(), hash), () => ({
+  await gitProgress(`Checkout ${hash.slice(0, 8)}`, () => gitApi.checkoutRevision(root(), hash), () => ({
     title: `Checked out ${hash.slice(0, 8)}`,
     message: "HEAD is now detached; create a branch to keep new commits.",
   }));
@@ -137,7 +164,7 @@ export async function checkoutRevision(hash: string) {
 }
 
 export async function initRepository() {
-  await withProgress("Initialize repository", () => gitApi.init(root()), () => ({
+  await gitProgress("Initialize repository", () => gitApi.init(root()), () => ({
     title: "Git repository created",
   }));
   await refreshGit();

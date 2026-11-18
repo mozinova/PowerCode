@@ -67,6 +67,7 @@ pub fn run() {
             git::git_commit_details,
             git::git_show_at,
             git::git_checkout_revision,
+            git::git_remove_index_lock,
             remote::remote_hosts,
             remote::remote_add_ssh_host,
             remote::remote_home,
