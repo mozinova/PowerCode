@@ -122,6 +122,9 @@ function Highlighted({ text, indices, offset = 0 }: { text: string; indices: Set
   );
 }
 
+/** The file index is rebuilt on focus when older than this (or after file changes). */
+const INDEX_MAX_AGE_MS = 30_000;
+
 export function FileSearch() {
   const root = useWorkspace((s) => s.root);
   const [query, setQuery] = useState("");
@@ -131,15 +134,35 @@ export function FileSearch() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Re-index on every focus so new files show up; the list is cheap to build.
+  const fsVersion = useWorkspace((s) => s.fsVersion);
+  /** When the shown index was built, and for which folder and file system version. */
+  const indexed = useRef<{ root: string; fsVersion: number; at: number } | null>(null);
+
+  // On focus the index is reused while fresh: building it walks the whole project,
+  // which takes seconds in WSL and SSH folders. It is rebuilt in the background
+  // (the previous list stays usable) when stale or after files were created,
+  // renamed or deleted (`fsVersion`).
   const index = () => {
     if (!root) return;
-    void track("Indexing files…", () => fsApi.listProjectFiles(root)).then(setFiles, () => setFiles([]));
+    const last = indexed.current;
+    const fresh = last && last.root === root && last.fsVersion === fsVersion && Date.now() - last.at < INDEX_MAX_AGE_MS;
+    if (fresh) return;
+    indexed.current = { root, fsVersion, at: Date.now() };
+    const label = files === null ? "Indexing files…" : "Updating file index…";
+    void track(label, () => fsApi.listProjectFiles(root)).then(
+      (list) => useWorkspace.getState().root === root && setFiles(list),
+      () => {
+        if (useWorkspace.getState().root !== root) return;
+        indexed.current = null;
+        setFiles((current) => current ?? []);
+      },
+    );
   };
 
   useEffect(() => {
     setFiles(null);
     setQuery("");
+    indexed.current = null;
   }, [root]);
 
   useEffect(() => {

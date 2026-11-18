@@ -19,6 +19,12 @@ use tauri::State;
 use crate::error::{err, CmdResult};
 
 const SCHEME: &str = "ssh://";
+const WSL_SESSION_PREFIX: &str = "wsl:";
+
+/// The session name of a WSL distribution (sessions of SSH hosts are named by the host).
+pub fn wsl_session(distro: &str) -> String {
+    format!("{WSL_SESSION_PREFIX}{distro}")
+}
 
 /// Splits `ssh://host/path` into the host and the remote absolute path.
 pub fn parse(path: &str) -> Option<(&str, String)> {
@@ -56,6 +62,11 @@ pub struct Session {
 
 impl Session {
     fn connect(host: &str) -> CmdResult<Self> {
+        // A WSL distribution: one long-lived shell instead of a `wsl.exe` per command
+        // (each costs ~200 ms), used for git, the file index and search in WSL folders.
+        if let Some(distro) = host.strip_prefix(WSL_SESSION_PREFIX) {
+            return Self::start(crate::wsl::command(distro, "/", "sh"), &format!("WSL: {distro}"));
+        }
         let mut ssh = ssh_command();
         ssh.args([
             "-T",
@@ -530,6 +541,28 @@ mod protocol_tests {
         assert_eq!(entries, vec!["d/.hidden", "d/sub", "f/it's a file.txt"]);
 
         session.exec(&format!("rm -rf -- {}", quote(&dir))).unwrap();
+    }
+
+    /// Timing of the WSL session on a real project (machine-specific): `cargo test -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn wsl_session_is_fast() {
+        let Some(distro) = crate::wsl::distributions().into_iter().next() else { return };
+        let project = "/home/daniel/deepseek-harness";
+        let remotes = Remotes::default();
+        let host = wsl_session(&distro);
+        let started = std::time::Instant::now();
+        remotes.exec_blocking(&host, "true").unwrap();
+        println!("session start: {:?}", started.elapsed());
+        let started = std::time::Instant::now();
+        let files = tauri::async_runtime::block_on(list_files(&remotes, &host, project, 50_000)).unwrap();
+        println!("file index: {} files in {:?}", files.len(), started.elapsed());
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            remotes.exec_blocking(&host, &crate::git::ssh_git_script(project, &["status".into(), "--porcelain=v2".into(), "-z".into()])).unwrap();
+        }
+        println!("5 git status: {:?}", started.elapsed());
+        assert!(!files.is_empty());
     }
 
     #[test]

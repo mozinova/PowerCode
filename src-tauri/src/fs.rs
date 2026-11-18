@@ -77,6 +77,12 @@ pub async fn list_project_files(remotes: State<'_, Remotes>, root: String) -> Cm
     if let Some((host, dir)) = remote::parse(&root) {
         return remote::list_files(&remotes, host, &dir, MAX_INDEXED_FILES).await;
     }
+    // Walking a WSL share takes seconds (each folder is a round trip to the distribution);
+    // listed inside it, the same index takes a fraction of a second.
+    if let Some((distro, dir)) = crate::wsl::parse_share(&root) {
+        let files = remote::list_files(&remotes, &remote::wsl_session(&distro), &dir, MAX_INDEXED_FILES).await?;
+        return Ok(files.into_iter().map(|f| f.replace('/', "\\")).collect());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         let walker = ignore::WalkBuilder::new(&root)
             .hidden(false)
@@ -192,4 +198,28 @@ pub async fn delete_path(remotes: State<'_, Remotes>, path: String) -> CmdResult
         return if p.is_dir() { std::fs::remove_dir_all(p) } else { std::fs::remove_file(p) }.map_err(err);
     }
     trash::delete(&path).map_err(err)
+}
+
+#[cfg(test)]
+mod wsl_tests {
+    /// The file index of a WSL folder comes from inside the distribution, with the
+    /// app's path separators (machine-specific): `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn lists_wsl_projects_natively() {
+        let Some(distro) = crate::wsl::distributions().into_iter().next() else { return };
+        let remotes = crate::remote::Remotes::default();
+        let started = std::time::Instant::now();
+        let files = tauri::async_runtime::block_on(crate::remote::list_files(
+            &remotes,
+            &crate::remote::wsl_session(&distro),
+            "/home/daniel/deepseek-harness",
+            super::MAX_INDEXED_FILES,
+        ))
+        .unwrap();
+        let files: Vec<String> = files.into_iter().map(|f| f.replace('/', "\\")).collect();
+        println!("{} files in {:?}, e.g. {:?}", files.len(), started.elapsed(), files.iter().find(|f| f.contains('\\')));
+        assert!(files.len() > 1000);
+        assert!(files.iter().all(|f| !f.contains('/')), "Windows separators, like the tree's paths");
+    }
 }

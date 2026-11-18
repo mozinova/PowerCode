@@ -66,6 +66,15 @@ fn run(cwd: &str, args: &[&str]) -> CmdResult<String> {
     if let Some((host, dir)) = crate::remote::parse(cwd) {
         return run_ssh(host, &dir, args);
     }
+    // In a WSL share, git runs in the distribution's session (no `wsl.exe` start per command).
+    if let Some((distro, dir)) = crate::wsl::parse_share(cwd) {
+        let args: Vec<String> = args
+            .iter()
+            .map(|a| crate::wsl::parse_share(a).map_or_else(|| a.to_string(), |(_, linux)| linux))
+            .collect();
+        let output = crate::remote::shared().exec_blocking(&crate::remote::wsl_session(&distro), &ssh_git_script(&dir, &args))?;
+        return Ok(String::from_utf8_lossy(&output).into_owned());
+    }
     // Git inside WSL needs Linux paths for any share paths passed as arguments.
     let args: Vec<String> = match crate::wsl::parse_share(cwd) {
         Some(_) => args
@@ -117,7 +126,32 @@ fn native(path: &str) -> String {
     }
 }
 
+/// Repository roots by folder: the status polled every few seconds would otherwise
+/// ask git for it each time (a second command, slow on WSL and SSH).
+fn toplevels() -> &'static std::sync::Mutex<std::collections::HashMap<String, String>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, String>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(Default::default)
+}
+
 fn toplevel(root: &str) -> CmdResult<String> {
+    if let Some(top) = toplevels().lock().ok().and_then(|cache| cache.get(root).cloned()) {
+        return Ok(top);
+    }
+    let top = find_toplevel(root)?;
+    if let Ok(mut cache) = toplevels().lock() {
+        cache.insert(root.to_string(), top.clone());
+    }
+    Ok(top)
+}
+
+/// Forgets `root`'s repository (it failed: e.g. `.git` was removed or moved).
+fn forget_toplevel(root: &str) {
+    if let Ok(mut cache) = toplevels().lock() {
+        cache.remove(root);
+    }
+}
+
+fn find_toplevel(root: &str) -> CmdResult<String> {
     let top = run(root, &["rev-parse", "--show-toplevel"])?;
     // Git inside WSL answers with a Linux path; the app uses the share path.
     if let Some((host, _)) = crate::remote::parse(root) {
@@ -259,11 +293,17 @@ pub async fn git_status(root: String) -> CmdResult<GitStatus> {
         let Ok(top) = toplevel(&root) else {
             return Ok(GitStatus::default());
         };
-        let output = run(
+        let status = run(
             &top,
             &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
-        )?;
-        Ok(parse_status(&top, &output))
+        );
+        match status {
+            Ok(output) => Ok(parse_status(&top, &output)),
+            Err(e) => {
+                forget_toplevel(&root);
+                Err(e)
+            }
+        }
     })
     .await
     .map_err(err)?
@@ -325,6 +365,8 @@ pub async fn git_commit(root: String, message: String, amend: bool) -> CmdResult
 
 #[tauri::command]
 pub async fn git_init(root: String) -> CmdResult<String> {
+    // The folder may have been inside another repository until now.
+    forget_toplevel(&root);
     run_async(root, vec!["init".into()]).await
 }
 

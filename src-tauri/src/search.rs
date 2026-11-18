@@ -155,12 +155,15 @@ fn match_line(re: &Regex, line: &str, number: usize) -> Option<LineMatch> {
 /// Searches an SSH workspace: `grep` on the host finds candidate lines, and
 /// they are matched again here so highlights follow the same rules as local
 /// searches. Regex searches use grep's extended syntax to find candidates.
+/// Searches with `grep` on the session `host` (an SSH host or a WSL distribution);
+/// `workspace_path` turns a path relative to `dir` into the app's path of that file.
 async fn search_remote(
     remotes: &Remotes,
     host: &str,
     dir: &str,
     options: &SearchOptions,
     re: &Regex,
+    workspace_path: impl Fn(&str) -> String,
 ) -> CmdResult<Vec<FileMatches>> {
     let mut script = format!(
         "cd -- {} && grep -rnIH --exclude-dir=.git --exclude-dir=node_modules",
@@ -194,7 +197,7 @@ async fn search_remote(
         match files.last_mut() {
             Some(file) if file.relative == path => file.matches.push(found),
             _ => files.push(FileMatches {
-                path: remote::join(host, &format!("{}/{path}", dir.trim_end_matches('/'))),
+                path: workspace_path(path),
                 relative: path.to_string(),
                 matches: vec![found],
             }),
@@ -224,8 +227,20 @@ pub async fn search_in_files(
     }
 
     let re = build_regex(&options)?;
-    if let Some((host, dir)) = remote::parse(&root) {
-        let found = search_remote(&remotes, host, &dir, &options, &re).await?;
+    // On SSH hosts and in WSL folders, grep runs there: reading every file through
+    // the WSL share would take minutes.
+    let remote_search = if let Some((host, dir)) = remote::parse(&root) {
+        let base = format!("{}/", dir.trim_end_matches('/'));
+        let host_name = host.to_string();
+        Some(search_remote(&remotes, host, &dir, &options, &re, move |rel| remote::join(&host_name, &format!("{base}{rel}"))).await)
+    } else if let Some((distro, dir)) = crate::wsl::parse_share(&root) {
+        let share = root.trim_end_matches('\\').to_string();
+        Some(search_remote(&remotes, &remote::wsl_session(&distro), &dir, &options, &re, move |rel| format!("{share}\\{}", rel.replace('/', "\\"))).await)
+    } else {
+        None
+    };
+    if let Some(found) = remote_search {
+        let found = found?;
         // A newer search started while this one ran on the host.
         if generation.load(Ordering::SeqCst) != this_search {
             return Ok(());
