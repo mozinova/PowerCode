@@ -1,5 +1,6 @@
 import { Loader2, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { COMMANDS, recentCommands, runCommand, type Command } from "../commands";
 import { fsApi } from "../lib/ipc";
 import { track } from "../state/activity";
 import { basename, joinPath } from "../lib/paths";
@@ -12,6 +13,40 @@ const MAX_RESULTS = 50;
 /** Focuses the title bar file search (Ctrl+Shift+N, like IntelliJ's "Go to File"). */
 export function focusFileSearch() {
   document.getElementById(INPUT_ID)?.focus();
+}
+
+let showCommands: (() => void) | null = null;
+
+/** Opens the command palette: the file search with a `>` prefix (Ctrl+Shift+P). */
+export function focusCommandPalette() {
+  showCommands?.();
+}
+
+interface CommandMatch {
+  command: Command;
+  /** Matched positions in `Category: Label`. */
+  indices: number[];
+  recent: boolean;
+}
+
+const commandTitle = (c: Command) => `${c.category}: ${c.label}`;
+
+/** Commands that apply now: recently used first when nothing is typed, otherwise by match. */
+function searchCommands(query: string): CommandMatch[] {
+  const available = COMMANDS.filter((c) => c.when?.() ?? true);
+  const recent = recentCommands();
+  if (!query) {
+    const rank = (c: Command) => (recent.includes(c.id) ? recent.indexOf(c.id) : recent.length);
+    return [...available]
+      .sort((a, b) => rank(a) - rank(b))
+      .map((command) => ({ command, indices: [], recent: recent.includes(command.id) }));
+  }
+  return available
+    .flatMap((command) => {
+      const match = fuzzyMatch(query, commandTitle(command));
+      return match ? [{ command, indices: match.indices, recent: recent.includes(command.id), score: match.score }] : [];
+    })
+    .sort((a, b) => b.score - a.score);
 }
 
 interface Match {
@@ -94,6 +129,7 @@ export function FileSearch() {
   const [files, setFiles] = useState<string[] | null>(null);
   const [selected, setSelected] = useState(0);
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Re-index on every focus so new files show up; the list is cheap to build.
   const index = () => {
@@ -106,12 +142,32 @@ export function FileSearch() {
     setQuery("");
   }, [root]);
 
-  const results = useMemo(
-    () => (files && query.trim() ? search(files, query.trim()) : []),
-    [files, query],
+  useEffect(() => {
+    showCommands = () => {
+      setQuery(">");
+      setOpen(true);
+      inputRef.current?.focus();
+    };
+    return () => {
+      showCommands = null;
+    };
+  }, []);
+
+  /** A leading `>` turns the file search into the command palette, as in VS Code. */
+  const commandMode = query.startsWith(">");
+  const commands = useMemo(
+    () => (commandMode ? searchCommands(query.slice(1).trim()) : []),
+    // Recomputed when opened, as availability depends on the app's state.
+    [commandMode, query, open],
   );
 
-  useEffect(() => setSelected(0), [results]);
+  const results = useMemo(
+    () => (!commandMode && files && query.trim() ? search(files, query.trim()) : []),
+    [commandMode, files, query],
+  );
+  const count = commandMode ? commands.length : results.length;
+
+  useEffect(() => setSelected(0), [results, commands]);
 
   useEffect(() => {
     listRef.current
@@ -119,24 +175,36 @@ export function FileSearch() {
       ?.scrollIntoView({ block: "nearest" });
   }, [selected]);
 
-  const choose = (match: Match | undefined) => {
-    if (!match || !root) return;
-    openFile(joinPath(root, match.relative));
+  const dismiss = () => {
     setOpen(false);
     setQuery("");
     (document.activeElement as HTMLElement | null)?.blur();
   };
 
+  const choose = (match: Match | undefined) => {
+    if (!match || !root) return;
+    openFile(joinPath(root, match.relative));
+    dismiss();
+  };
+
+  /** Runs a command once the palette is closed, so commands that move focus keep it. */
+  const execute = (match: CommandMatch | undefined) => {
+    if (!match) return;
+    dismiss();
+    void runCommand(match.command);
+  };
+
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     switch (e.key) {
       case "ArrowDown":
-        setSelected((i) => Math.min(results.length - 1, i + 1));
+        setSelected((i) => Math.min(count - 1, i + 1));
         break;
       case "ArrowUp":
         setSelected((i) => Math.max(0, i - 1));
         break;
       case "Enter":
-        choose(results[selected]);
+        if (commandMode) execute(commands[selected]);
+        else choose(results[selected]);
         break;
       case "Escape":
         setOpen(false);
@@ -155,9 +223,9 @@ export function FileSearch() {
       <div className="flex h-7 items-center gap-2 rounded-md border border-input-border bg-input px-2 focus-within:border-accent">
         <Search size={14} className="shrink-0 text-fg-muted" />
         <input
+          ref={inputRef}
           id={INPUT_ID}
           value={query}
-          disabled={!root}
           onChange={(e) => {
             setQuery(e.target.value);
             setOpen(true);
@@ -168,19 +236,62 @@ export function FileSearch() {
           }}
           onBlur={() => setOpen(false)}
           onKeyDown={onKeyDown}
-          placeholder={root ? `Search files by name at ${basename(root)}` : "Open a folder to search files"}
+          placeholder={
+            root
+              ? `Search files by name at ${basename(root)}  (> for commands)`
+              : "Type > for commands, or open a folder to search files"
+          }
           spellCheck={false}
           autoComplete="off"
-          className="h-full min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-subtle disabled:cursor-default"
+          className="h-full min-w-0 flex-1 bg-transparent text-fg outline-none placeholder:text-fg-subtle"
         />
-        {open && query && files === null ? (
+        {open && query && !commandMode && root && files === null ? (
           <Loader2 size={14} className="shrink-0 animate-spin text-fg-muted" />
         ) : (
-          <span className="shrink-0 text-xs text-fg-subtle">Ctrl+Shift+N</span>
+          <span className="shrink-0 text-xs text-fg-subtle">{commandMode ? "Ctrl+Shift+P" : "Ctrl+Shift+N"}</span>
         )}
       </div>
 
-      {open && query.trim() && files !== null && (
+      {open && commandMode && (
+        <div
+          ref={listRef}
+          role="listbox"
+          aria-label="Commands"
+          onMouseDown={(e) => e.preventDefault()}
+          className="absolute top-full right-0 left-0 z-50 mt-1 max-h-[420px] overflow-y-auto rounded-lg border border-line-soft bg-panel p-1 shadow-xl shadow-black/40"
+        >
+          {commands.length === 0 && <div className="px-2.5 py-1.5 text-fg-muted">No matching commands</div>}
+          {commands.map((match, i) => (
+            <div
+              key={match.command.id}
+              data-index={i}
+              role="option"
+              aria-selected={i === selected}
+              onMouseMove={() => setSelected(i)}
+              onClick={() => execute(match)}
+              className={`flex h-7 cursor-default items-center gap-2 rounded px-2.5 whitespace-nowrap ${
+                i === selected ? "bg-selected" : ""
+              }`}
+            >
+              <span className="min-w-0 flex-1 truncate">
+                <Highlighted text={commandTitle(match.command)} indices={new Set(match.indices)} />
+              </span>
+              {match.recent && <span className="shrink-0 text-xs text-fg-subtle">recently used</span>}
+              {match.command.shortcut && (
+                <span className="shrink-0 text-xs text-fg-muted">{match.command.shortcut}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {open && !commandMode && query.trim() && !root && (
+        <div className="absolute top-full right-0 left-0 z-50 mt-1 rounded-lg border border-line-soft bg-panel px-3 py-2 text-fg-muted shadow-xl shadow-black/40">
+          Open a folder to search files, or type <span className="font-code text-fg">&gt;</span> for commands.
+        </div>
+      )}
+
+      {open && !commandMode && query.trim() && files !== null && (
         <div
           ref={listRef}
           role="listbox"

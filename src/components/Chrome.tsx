@@ -25,6 +25,7 @@ import { basename } from "../lib/paths";
 import { useGit } from "../git/store";
 import { remoteLabel, remoteOf } from "../lib/remote";
 import { useActivity } from "../state/activity";
+import { setAutoSave, useSettings } from "../state/settings";
 import { useWorkspace } from "../state/workspace";
 import { BranchWidget } from "./BranchWidget";
 import { FileSearch } from "./FileSearch";
@@ -37,6 +38,7 @@ function MainMenu() {
   const anchorRef = useRef<HTMLDivElement>(null);
   const hasActive = useWorkspace((s) => s.activePath !== null);
   const hasRoot = useWorkspace((s) => s.root !== null);
+  const autoSave = useSettings((s) => s.autoSave);
   const { toggleLeftTool, toggleBottomTool } = useWorkspace.getState();
   const close = useCallback(() => setOpen(false), []);
 
@@ -45,6 +47,7 @@ function MainMenu() {
     { label: "Close Folder", action: () => void closeFolder(), disabled: !hasRoot },
     "separator",
     { label: "Save", shortcut: "Ctrl+S", action: () => void saveActive(), disabled: !hasActive },
+    { label: "Auto Save", checked: autoSave, action: () => setAutoSave(!autoSave) },
     { label: "Close Tab", shortcut: "Ctrl+F4", action: closeActiveTab, disabled: !hasActive },
     "separator",
     { label: "Project", shortcut: "Alt+1", action: () => toggleLeftTool("project") },
@@ -241,12 +244,13 @@ function RemoteIndicator() {
     { label: "Remote Hosts", icon: Server, action: () => setLeftTool("remote") },
   ];
   return (
-    <div ref={anchorRef} className="-ml-2 mr-3 h-full shrink-0">
+    // Kept clear of the window's bottom-left corner, which Windows 11 rounds and would clip.
+    <div ref={anchorRef} className="mr-3 h-full shrink-0">
       <button
         type="button"
         {...tooltipProps(`Remote: ${remoteLabel(remote)}`)}
         onClick={() => setOpen(!open)}
-        className="flex h-full items-center gap-1.5 bg-accent px-2.5 text-white hover:bg-accent-hover"
+        className="flex h-full items-center gap-1.5 rounded-none bg-accent px-2.5 text-white hover:bg-accent-hover"
       >
         <Server size={12} />
         {remoteLabel(remote)}

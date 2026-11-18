@@ -1,19 +1,24 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef } from "react";
+import { Group as PanelGroup, Panel, Separator } from "react-resizable-panels";
 import { monaco } from "../editor/monaco";
 import { loadModel } from "../editor/models";
 import { errorMessage } from "../lib/ipc";
 import { mediaKind } from "../lib/media";
 import { isVirtualTab, parseCommitDiffTab, parseDiffTab, parseExtensionTab } from "../lib/virtualTabs";
 import { attachGitGutter } from "../git/gutter";
-import { useWorkspace } from "../state/workspace";
+import { useWorkspace, type EditorGroup } from "../state/workspace";
 import { DiffView } from "./DiffView";
 import { EditorTabs } from "./EditorTabs";
 import { ExtensionPage } from "./ExtensionPage";
 import { MediaViewer } from "./MediaViewer";
 import { Kbd } from "./ui";
 
+/** Scroll position and selections per group and file, restored when switching tabs. */
 const viewStates = new Map<string, monaco.editor.ICodeEditorViewState | null>();
+const viewKey = (group: number, path: string) => `${group}\u0000${path}`;
+
+const isFocusedGroup = (group: number) => useWorkspace.getState().activeGroup === group;
 
 function EmptyEditor() {
   const root = useWorkspace((s) => s.root);
@@ -70,10 +75,10 @@ function updateStatus(editor: monaco.editor.ICodeEditor) {
 
 let appliedReveal = 0;
 
-/** Selects the pending reveal location if it is for `path`. */
-function applyReveal(editor: monaco.editor.ICodeEditor, path: string) {
+/** Selects the pending reveal location if it is for `path` and this group is focused. */
+function applyReveal(editor: monaco.editor.ICodeEditor, group: number, path: string) {
   const reveal = useWorkspace.getState().reveal;
-  if (!reveal || reveal.path !== path || reveal.nonce === appliedReveal) return;
+  if (!reveal || reveal.path !== path || reveal.nonce === appliedReveal || !isFocusedGroup(group)) return;
   appliedReveal = reveal.nonce;
   const selection = new monaco.Selection(reveal.line, reveal.column, reveal.line, reveal.endColumn);
   editor.setSelection(selection);
@@ -81,11 +86,13 @@ function applyReveal(editor: monaco.editor.ICodeEditor, path: string) {
   editor.focus();
 }
 
-function MonacoHost() {
+/** The Monaco editor of one group. Files open in two groups share their model. */
+function MonacoHost({ group }: { group: EditorGroup }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const shownPathRef = useRef<string | null>(null);
-  const activePath = useWorkspace((s) => s.activePath);
+  const activePath = group.activePath;
+  const focused = useWorkspace((s) => s.activeGroup === group.id);
 
   useEffect(() => {
     const editor = monaco.editor.create(containerRef.current!, {
@@ -107,11 +114,14 @@ function MonacoHost() {
     });
     editorRef.current = editor;
     const gutter = attachGitGutter(editor);
+    // Only the focused group's editor drives the status bar.
+    const status = () => isFocusedGroup(group.id) && updateStatus(editor);
     const listeners = [
-      editor.onDidChangeCursorSelection(() => updateStatus(editor)),
-      editor.onDidChangeModel(() => updateStatus(editor)),
-      editor.onDidChangeModelLanguage(() => updateStatus(editor)),
-      editor.onDidChangeModelOptions(() => updateStatus(editor)),
+      editor.onDidChangeCursorSelection(status),
+      editor.onDidChangeModel(status),
+      editor.onDidChangeModelLanguage(status),
+      editor.onDidChangeModelOptions(status),
+      editor.onDidFocusEditorText(() => useWorkspace.getState().focusGroup(group.id)),
     ];
     return () => {
       listeners.forEach((l) => l.dispose());
@@ -119,7 +129,12 @@ function MonacoHost() {
       editor.dispose();
       editorRef.current = null;
     };
-  }, []);
+  }, [group.id]);
+
+  // Switching groups shows the newly focused editor's position in the status bar.
+  useEffect(() => {
+    if (focused && editorRef.current) updateStatus(editorRef.current);
+  }, [focused]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -127,7 +142,7 @@ function MonacoHost() {
 
     const previous = shownPathRef.current;
     if (previous && previous !== activePath && editor.getModel() && !editor.getModel()!.isDisposed()) {
-      viewStates.set(previous, editor.saveViewState());
+      viewStates.set(viewKey(group.id, previous), editor.saveViewState());
     }
 
     // Media files and pages are shown on top of an empty editor.
@@ -143,14 +158,15 @@ function MonacoHost() {
         if (cancelled) return;
         shownPathRef.current = activePath;
         editor.setModel(model);
-        const viewState = viewStates.get(activePath);
+        const viewState = viewStates.get(viewKey(group.id, activePath));
         if (viewState) editor.restoreViewState(viewState);
-        applyReveal(editor, activePath);
-        editor.focus();
+        applyReveal(editor, group.id, activePath);
+        // A background group loading its file must not steal focus.
+        if (isFocusedGroup(group.id)) editor.focus();
       },
       async (e) => {
         if (cancelled) return;
-        useWorkspace.getState().closeTab(activePath);
+        useWorkspace.getState().closeTab(activePath, group.id);
         await message(`Could not open the file:\n${errorMessage(e)}`, {
           title: "PowerCode",
           kind: "error",
@@ -160,46 +176,64 @@ function MonacoHost() {
     return () => {
       cancelled = true;
     };
-  }, [activePath]);
+  }, [activePath, group.id]);
 
   // A reveal for the file already shown (e.g. another match in it) applies right away.
   const reveal = useWorkspace((s) => s.reveal);
   useEffect(() => {
     const editor = editorRef.current;
-    if (editor && reveal && shownPathRef.current === reveal.path) applyReveal(editor, reveal.path);
-  }, [reveal]);
+    if (editor && reveal && shownPathRef.current === reveal.path) applyReveal(editor, group.id, reveal.path);
+  }, [reveal, group.id]);
 
-  // Forget view states of closed tabs.
-  const tabs = useWorkspace((s) => s.tabs);
+  // Forget view states of tabs this group closed.
   useEffect(() => {
-    const open = new Set(tabs.map((t) => t.path));
-    for (const path of viewStates.keys()) if (!open.has(path)) viewStates.delete(path);
-  }, [tabs]);
+    const open = new Set(group.tabs.map((t) => viewKey(group.id, t.path)));
+    const prefix = viewKey(group.id, "");
+    for (const key of viewStates.keys()) if (key.startsWith(prefix) && !open.has(key)) viewStates.delete(key);
+  }, [group.tabs, group.id]);
 
   return <div ref={containerRef} className="absolute inset-0" />;
 }
 
-export function EditorArea() {
-  const tabs = useWorkspace((s) => s.tabs);
-  const activePath = useWorkspace((s) => s.activePath);
+function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean }) {
+  const focused = useWorkspace((s) => s.activeGroup === group.id);
+  const focusGroup = useWorkspace((s) => s.focusGroup);
+  const activePath = group.activePath;
   const extension = activePath ? parseExtensionTab(activePath) : null;
   const diff = activePath ? parseDiffTab(activePath) : null;
   const commitDiff = activePath ? parseCommitDiffTab(activePath) : null;
   const media = activePath && !isVirtualTab(activePath) ? mediaKind(activePath) : null;
 
   return (
-    <div className="flex h-full flex-col bg-editor">
-      {tabs.length > 0 && <EditorTabs />}
+    // Any click inside a group (tabs, editor, pages) focuses it.
+    <div className="flex h-full flex-col bg-editor" onMouseDownCapture={() => focusGroup(group.id)}>
+      {group.tabs.length > 0 && <EditorTabs group={group} focused={focused || !split} />}
       <div className="relative min-h-0 flex-1">
-        <MonacoHost />
+        <MonacoHost group={group} />
         {!activePath && <EmptyEditor />}
         {activePath && media && <MediaViewer path={activePath} kind={media} />}
         {extension && <ExtensionPage key={activePath} namespace={extension.namespace} name={extension.name} />}
         {diff && <DiffView key={diff} path={diff} />}
-        {commitDiff && (
-          <DiffView key={activePath} path={commitDiff.file} revision={commitDiff.hash} />
-        )}
+        {commitDiff && <DiffView key={activePath} path={commitDiff.file} revision={commitDiff.hash} />}
       </div>
     </div>
+  );
+}
+
+/** The editor groups side by side (Split Editor), resizable. */
+export function EditorArea() {
+  const groups = useWorkspace((s) => s.groups);
+  // Always the same container, so splitting does not recreate the first group's editor.
+  return (
+    <PanelGroup orientation="horizontal" className="h-full">
+      {groups.map((group, i) => (
+        <Fragment key={group.id}>
+          {i > 0 && <Separator />}
+          <Panel id={`editor-group-${group.id}`} minSize={200}>
+            <EditorGroupView group={group} split={groups.length > 1} />
+          </Panel>
+        </Fragment>
+      ))}
+    </PanelGroup>
   );
 }

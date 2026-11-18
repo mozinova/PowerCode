@@ -5,9 +5,11 @@ import { basename, isWithin, movedPath } from "./lib/paths";
 import { remoteLabel, remoteOf } from "./lib/remote";
 import { extensionTabPath, parseDiffTab } from "./lib/virtualTabs";
 import { refreshGit } from "./git/store";
+import { saveIfDirty } from "./editor/autosave";
 import { pickRemoteFolder } from "./state/folderPicker";
+import { useSettings } from "./state/settings";
 import { notify } from "./state/notifications";
-import { useWorkspace } from "./state/workspace";
+import { openPaths, useWorkspace } from "./state/workspace";
 import { closeAllTerminals, newTerminal } from "./terminal/sessions";
 
 const LAST_ROOT_KEY = "powercode.lastRoot";
@@ -113,18 +115,48 @@ export async function saveActive() {
   }
 }
 
-export function closeTab(path: string) {
-  return closeTabs([path]);
+export function closeTab(path: string, group?: number) {
+  return closeTabs([path], group);
 }
 
-/** Closes several tabs, asking once about all of their unsaved changes. */
-export async function closeTabs(paths: string[]) {
-  const tabs = useWorkspace.getState().tabs.filter((t) => paths.includes(t.path));
-  if (!(await confirmDiscard(tabs.filter((t) => t.dirty).map((t) => t.name)))) return;
-  for (const tab of tabs) {
-    useWorkspace.getState().closeTab(tab.path);
-    disposeModel(tab.path);
+/** Disposes the models of `paths` that no editor group shows any more. */
+function releaseModels(paths: string[]) {
+  const stillOpen = openPaths(useWorkspace.getState());
+  for (const path of paths) if (!stillOpen.has(path)) disposeModel(path);
+}
+
+/**
+ * Closes several tabs of `group` (the active group by default). With auto save
+ * on, unsaved files are saved first; otherwise (or if saving fails) the user is
+ * asked once about them. A file still open in another group keeps its edits,
+ * so it is not saved or asked about.
+ */
+export async function closeTabs(paths: string[], group?: number) {
+  const state = useWorkspace.getState();
+  const groupId = group ?? state.activeGroup;
+  const tabs = state.groups.find((g) => g.id === groupId)?.tabs.filter((t) => paths.includes(t.path)) ?? [];
+  const elsewhere = new Set(
+    state.groups.filter((g) => g.id !== groupId).flatMap((g) => g.tabs.map((t) => t.path)),
+  );
+  let losing = tabs.filter((t) => t.dirty && !elsewhere.has(t.path));
+  if (useSettings.getState().autoSave && losing.length > 0) {
+    const saved = await Promise.all(losing.map((t) => saveIfDirty(t.path)));
+    losing = losing.filter((_, i) => !saved[i]);
   }
+  if (!(await confirmDiscard(losing.map((t) => t.name)))) return;
+  for (const tab of tabs) useWorkspace.getState().closeTab(tab.path, groupId);
+  releaseModels(tabs.map((t) => t.path));
+}
+
+/** Closes every tab, in every group, showing `path` or a file inside it, and drops their models. */
+function closeEverywhere(path: string) {
+  const closing = [...openPaths(useWorkspace.getState())].filter((p) => isWithin(p, path));
+  for (const group of useWorkspace.getState().groups) {
+    for (const tab of group.tabs) {
+      if (isWithin(tab.path, path)) useWorkspace.getState().closeTab(tab.path, group.id);
+    }
+  }
+  for (const p of closing) disposeModel(p);
 }
 
 export function closeActiveTab() {
@@ -145,8 +177,8 @@ export async function createEntry(path: string, kind: "file" | "folder") {
 /** Renames a file or folder, keeping its open tabs (and their unsaved edits). */
 export async function renameEntry(from: string, to: string) {
   await fsApi.renamePath(from, to);
-  for (const tab of useWorkspace.getState().tabs) {
-    if (isWithin(tab.path, from)) moveModel(tab.path, movedPath(tab.path, from, to));
+  for (const path of openPaths(useWorkspace.getState())) {
+    if (isWithin(path, from)) moveModel(path, movedPath(path, from, to));
   }
   useWorkspace.getState().renamePaths(from, to);
   void refreshGit();
@@ -175,12 +207,7 @@ export async function deleteEntry(path: string, isDir: boolean): Promise<boolean
     });
     return false;
   }
-  for (const tab of useWorkspace.getState().tabs) {
-    if (isWithin(tab.path, path)) {
-      useWorkspace.getState().closeTab(tab.path);
-      disposeModel(tab.path);
-    }
-  }
+  closeEverywhere(path);
   void refreshGit();
   return true;
 }
