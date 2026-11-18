@@ -188,6 +188,12 @@ function defineMonacoTheme(theme: EditorTheme, extraRules: monaco.editor.ITokenT
 }
 
 let activeColors: Record<string, string> = {};
+let activeBase: monaco.editor.BuiltinTheme = "vs-dark";
+
+/** VS Code's `ColorThemeKind` of the active theme: 1 light, 2 dark, 3 high contrast, 4 high contrast light. */
+export function activeThemeKind(): number {
+  return { vs: 1, "vs-dark": 2, "hc-black": 3, "hc-light": 4 }[activeBase] ?? 2;
+}
 
 /** Workbench colours of the active theme (`editor.background`, ...), e.g. for webviews. */
 export function activeThemeColors(): Record<string, string> {
@@ -198,11 +204,13 @@ export function activeThemeColors(): Record<string, string> {
 export function defineEditorTheme(theme: EditorTheme) {
   defineMonacoTheme(theme, []);
   activeColors = theme.colors;
+  activeBase = theme.base;
 }
 
 /** Makes `theme` the active editor theme for both Monarch and TextMate tokens. */
 export async function applyEditorTheme(theme: EditorTheme) {
   activeColors = theme.colors;
+  activeBase = theme.base;
   defineMonacoTheme(theme, []);
   monaco.editor.setTheme(theme.id);
   const textMateRules = await setTextMateTheme({ name: theme.label, settings: theme.tokenColors });

@@ -901,3 +901,371 @@ export enum DebugConfigurationProviderTriggerKind {
   Initial = 1,
   Dynamic = 2,
 }
+
+// ---- The rest of the API's values (enums and plain value classes) ----
+// Bundled extensions copy the module's own properties (esbuild's __toESM), so
+// every name VS Code exports must exist here, even where PowerCode does not act on it.
+
+export enum ColorThemeKind {
+  Light = 1, Dark = 2, HighContrast = 3, HighContrastLight = 4,
+}
+
+export enum TreeItemCheckboxState {
+  Unchecked = 0, Checked = 1,
+}
+
+export enum IndentAction {
+  None = 0, Indent = 1, IndentOutdent = 2, Outdent = 3,
+}
+
+export enum TextEditorCursorStyle {
+  Line = 1, Block = 2, Underline = 3, LineThin = 4, BlockOutline = 5, UnderlineThin = 6,
+}
+
+export enum TextEditorLineNumbersStyle {
+  Off = 0, On = 1, Relative = 2, Interval = 3,
+}
+
+export enum TextEditorSelectionChangeKind {
+  Keyboard = 1, Mouse = 2, Command = 3,
+}
+
+export enum OverviewRulerLane {
+  Left = 1, Center = 2, Right = 4, Full = 7,
+}
+
+export enum DecorationRangeBehavior {
+  OpenOpen = 0, ClosedClosed = 1, OpenClosed = 2, ClosedOpen = 3,
+}
+
+export enum QuickPickItemKind {
+  Separator = -1, Default = 0,
+}
+
+export enum FileChangeType {
+  Changed = 1, Created = 2, Deleted = 3,
+}
+
+export enum TaskScope {
+  Global = 1, Workspace = 2,
+}
+
+export enum TaskRevealKind {
+  Always = 1, Silent = 2, Never = 3,
+}
+
+export enum TaskPanelKind {
+  Shared = 1, Dedicated = 2, New = 3,
+}
+
+export enum TerminalLocation {
+  Panel = 1, Editor = 2,
+}
+
+export enum TerminalExitReason {
+  Unknown = 0, Shutdown = 1, Process = 2, User = 3, Extension = 4,
+}
+
+export enum EnvironmentVariableMutatorType {
+  Replace = 1, Append = 2, Prepend = 3,
+}
+
+export enum InlineCompletionTriggerKind {
+  Invoke = 0, Automatic = 1,
+}
+
+export enum CommentMode {
+  Editing = 0, Preview = 1,
+}
+
+export enum CommentThreadCollapsibleState {
+  Collapsed = 0, Expanded = 1,
+}
+
+export enum TestRunProfileKind {
+  Run = 1, Debug = 2, Coverage = 3,
+}
+
+export enum InputBoxValidationSeverity {
+  Info = 1, Warning = 2, Error = 3,
+}
+
+export enum TextDocumentChangeReason {
+  Undo = 1, Redo = 2,
+}
+
+export class QuickInputButtons {
+  static readonly Back = { iconPath: new ThemeIcon("arrow-left") };
+}
+
+export class SnippetTextEdit {
+  static replace(range: Range, snippet: SnippetString) {
+    return new SnippetTextEdit(range, snippet);
+  }
+  static insert(position: Position, snippet: SnippetString) {
+    return new SnippetTextEdit(new Range(position, position), snippet);
+  }
+  constructor(
+    public range: Range,
+    public snippet: SnippetString,
+  ) {}
+}
+
+export class InlayHintLabelPart {
+  tooltip?: string | MarkdownString;
+  location?: Location;
+  command?: unknown;
+  constructor(public value: string) {}
+}
+
+export class SemanticTokensEdit {
+  constructor(
+    readonly start: number,
+    readonly deleteCount: number,
+    readonly data?: Uint32Array,
+  ) {}
+}
+
+export class SemanticTokensEdits {
+  constructor(
+    readonly edits: SemanticTokensEdit[],
+    readonly resultId?: string,
+  ) {}
+}
+
+export class CallHierarchyItem {
+  tags?: number[];
+  constructor(
+    public kind: number,
+    public name: string,
+    public detail: string,
+    public uri: Uri,
+    public range: Range,
+    public selectionRange: Range,
+  ) {}
+}
+
+export class CallHierarchyIncomingCall {
+  constructor(
+    public from: CallHierarchyItem,
+    public fromRanges: Range[],
+  ) {}
+}
+
+export class CallHierarchyOutgoingCall {
+  constructor(
+    public to: CallHierarchyItem,
+    public fromRanges: Range[],
+  ) {}
+}
+
+export class TypeHierarchyItem {
+  tags?: number[];
+  constructor(
+    public kind: number,
+    public name: string,
+    public detail: string,
+    public uri: Uri,
+    public range: Range,
+    public selectionRange: Range,
+  ) {}
+}
+
+export class EvaluatableExpression {
+  constructor(
+    readonly range: Range,
+    readonly expression?: string,
+  ) {}
+}
+
+export class InlineValueText {
+  constructor(
+    readonly range: Range,
+    readonly text: string,
+  ) {}
+}
+
+export class InlineValueVariableLookup {
+  constructor(
+    readonly range: Range,
+    readonly variableName?: string,
+    readonly caseSensitiveLookup = true,
+  ) {}
+}
+
+export class InlineValueEvaluatableExpression {
+  constructor(
+    readonly range: Range,
+    readonly expression?: string,
+  ) {}
+}
+
+export class LinkedEditingRanges {
+  constructor(
+    readonly ranges: Range[],
+    readonly wordPattern?: RegExp,
+  ) {}
+}
+
+export class InlineCompletionItem {
+  filterText?: string;
+  constructor(
+    public insertText: string | SnippetString,
+    public range?: Range,
+    public command?: unknown,
+  ) {}
+}
+
+export class InlineCompletionList {
+  constructor(public items: InlineCompletionItem[]) {}
+}
+
+export class DataTransferItem {
+  constructor(readonly value: unknown) {}
+  async asString() {
+    return typeof this.value === "string" ? this.value : JSON.stringify(this.value);
+  }
+  asFile() {
+    return undefined;
+  }
+}
+
+export class DataTransfer {
+  private readonly items = new Map<string, DataTransferItem>();
+  get(mimeType: string) {
+    return this.items.get(mimeType.toLowerCase());
+  }
+  set(mimeType: string, value: DataTransferItem) {
+    this.items.set(mimeType.toLowerCase(), value);
+  }
+  forEach(callback: (item: DataTransferItem, mimeType: string, dataTransfer: DataTransfer) => void) {
+    this.items.forEach((item, mime) => callback(item, mime, this));
+  }
+  [Symbol.iterator]() {
+    return this.items.entries();
+  }
+}
+
+export class DocumentDropEdit {
+  additionalEdit?: WorkspaceEdit;
+  constructor(public insertText: string | SnippetString) {}
+}
+
+export class DocumentPasteEdit {
+  additionalEdit?: WorkspaceEdit;
+  constructor(
+    public insertText: string | SnippetString,
+    public title: string,
+  ) {}
+}
+
+export class TaskGroup {
+  static readonly Clean = new TaskGroup("clean", "Clean");
+  static readonly Build = new TaskGroup("build", "Build");
+  static readonly Rebuild = new TaskGroup("rebuild", "Rebuild");
+  static readonly Test = new TaskGroup("test", "Test");
+  isDefault?: boolean;
+  constructor(
+    readonly id: string,
+    readonly label: string,
+  ) {}
+}
+
+export class ShellExecution {
+  constructor(
+    public commandLine: unknown,
+    public args?: unknown,
+    public options?: { cwd?: string; env?: Record<string, string> },
+  ) {}
+}
+
+export class ProcessExecution {
+  constructor(
+    public process: string,
+    public args?: unknown,
+    public options?: { cwd?: string; env?: Record<string, string> },
+  ) {}
+}
+
+export class CustomExecution {
+  constructor(readonly callback: (resolvedDefinition: unknown) => PromiseLike<unknown>) {}
+}
+
+export class Task {
+  group?: TaskGroup;
+  presentationOptions: Record<string, unknown> = {};
+  runOptions: Record<string, unknown> = {};
+  isBackground = false;
+  detail?: string;
+  problemMatchers: string[];
+  constructor(
+    public definition: { type: string; [key: string]: unknown },
+    public scope: unknown,
+    public name: string,
+    public source: string,
+    public execution?: ShellExecution | ProcessExecution | CustomExecution,
+    problemMatchers?: string | string[],
+  ) {
+    this.problemMatchers = typeof problemMatchers === "string" ? [problemMatchers] : (problemMatchers ?? []);
+  }
+}
+
+export class TabInputText {
+  constructor(readonly uri: Uri) {}
+}
+
+export class TabInputTextDiff {
+  constructor(
+    readonly original: Uri,
+    readonly modified: Uri,
+  ) {}
+}
+
+export class TabInputCustom {
+  constructor(
+    readonly uri: Uri,
+    readonly viewType: string,
+  ) {}
+}
+
+export class TabInputWebview {
+  constructor(readonly viewType: string) {}
+}
+
+export class TabInputNotebook {
+  constructor(
+    readonly uri: Uri,
+    readonly notebookType: string,
+  ) {}
+}
+
+export class TabInputTerminal {}
+
+export class TestTag {
+  constructor(readonly id: string) {}
+}
+
+export class TestMessage {
+  expectedOutput?: string;
+  actualOutput?: string;
+  location?: Location;
+  static diff(message: string | MarkdownString, expected: string, actual: string) {
+    const result = new TestMessage(message);
+    result.expectedOutput = expected;
+    result.actualOutput = actual;
+    return result;
+  }
+  constructor(public message: string | MarkdownString) {}
+}
+
+export class TerminalLink {
+  constructor(
+    public startIndex: number,
+    public length: number,
+    public tooltip?: string,
+  ) {}
+}
+
+export class TerminalProfile {
+  constructor(public options: unknown) {}
+}

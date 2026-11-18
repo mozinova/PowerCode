@@ -23,7 +23,11 @@ export const host = {
   logPath: "",
   /** Origin of the UI's webview protocol, for `asWebviewUri` and `cspSource`. */
   webviewOrigin: "",
+  /** `ColorThemeKind` of the editor theme: 1 light, 2 dark, 3 high contrast, 4 high contrast light. */
+  colorThemeKind: 2,
 };
+
+export const onDidChangeColorTheme = new EventEmitter<{ kind: number }>();
 
 export const onDidChangeConfiguration = new EventEmitter<{ affectsConfiguration(section: string): boolean }>();
 

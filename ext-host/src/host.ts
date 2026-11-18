@@ -12,7 +12,7 @@ import * as providers from "./providers";
 import * as rpc from "./rpc";
 import * as views from "./views";
 import * as debug from "./debug";
-import { collectDefaults, host, onDidChangeConfiguration, type ExtensionDescription } from "./state";
+import { collectDefaults, host, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import { EventEmitter, ExtensionMode, Range, Uri } from "./types";
 
 // Extensions' console output goes to the "Extension Host" log, never to the protocol stream.
@@ -263,6 +263,7 @@ rpc.onRequest("initialize", async (params: any) => {
   host.globalStoragePath = params.globalStoragePath;
   host.logPath = params.logPath;
   host.webviewOrigin = params.webviewOrigin ?? "";
+  host.colorThemeKind = params.colorThemeKind ?? 2;
   return {
     // Commands contributed by extensions with code, for the command palette.
     commands: runnable().flatMap((e) =>
@@ -347,6 +348,12 @@ rpc.onNotification("configuration/changed", (params: { settings: Record<string, 
     affectsConfiguration: (section: string) =>
       [...changed].some((key) => key === section || key.startsWith(`${section}.`) || section.startsWith(`${key}.`)),
   });
+});
+
+rpc.onNotification("theme/changed", (params: { kind: number }) => {
+  if (params.kind === host.colorThemeKind) return;
+  host.colorThemeKind = params.kind;
+  onDidChangeColorTheme.fire({ kind: params.kind });
 });
 
 rpc.onRequest("shutdown", async () => {

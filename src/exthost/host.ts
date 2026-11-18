@@ -10,6 +10,7 @@ import { activeEditor } from "../components/EditorArea";
 import { monaco } from "../editor/monaco";
 import { isModelDirty, loadModel, modelPath, onDidSaveModel, saveModel } from "../editor/models";
 import { useExtensions } from "../extensions/runtime";
+import { activeThemeKind } from "../editor/themes";
 import { errorMessage, fsApi, type InstalledExtension } from "../lib/ipc";
 import { basename } from "../lib/paths";
 import { remoteOf } from "../lib/remote";
@@ -143,6 +144,7 @@ async function start(key: string, extensions: InstalledExtension[], root: string
         storagePath: await join(data, "exthost", "workspaces", storageKey),
         logPath: await join(data, "exthost", "logs"),
         webviewOrigin: WEBVIEW_ORIGIN,
+        colorThemeKind: activeThemeKind(),
       });
       setConfigurationContext(settings, result.defaults);
       useExtensionHost.setState({ commands: result.commands, status: "running" });
@@ -669,6 +671,8 @@ export function startExtensionHost() {
   // Installing, updating or uninstalling an extension with code restarts the host.
   useExtensions.subscribe((s, previous) => {
     if (s.installed !== previous.installed) scheduleSync();
+    // `window.activeColorTheme` follows the editor theme.
+    if (s.activeThemeId !== previous.activeThemeId && rpc.isRunning()) rpc.notify("theme/changed", { kind: activeThemeKind() });
   });
   scheduleSync(0);
 }

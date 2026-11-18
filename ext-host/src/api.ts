@@ -11,7 +11,7 @@ import * as dto from "./dto";
 import { matchesGlob } from "./glob";
 import * as providers from "./providers";
 import * as rpc from "./rpc";
-import { host, lookup, onDidChangeConfiguration, type ExtensionDescription } from "./state";
+import { host, lookup, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import * as types from "./types";
 import * as views from "./views";
 import { createDebugApi } from "./debug";
@@ -710,7 +710,9 @@ export function createApi(description: ExtensionDescription) {
       get terminals() {
         return [];
       },
-      activeColorTheme: { kind: 2 },
+      get activeColorTheme() {
+        return { kind: host.colorThemeKind };
+      },
       state: { focused: true, active: true },
       tabGroups: { all: [], activeTabGroup: { tabs: [] }, onDidChangeTabs: never(), onDidChangeTabGroups: never() },
       onDidChangeActiveTextEditor: onDidChangeActiveTextEditor.event,
@@ -719,7 +721,7 @@ export function createApi(description: ExtensionDescription) {
       onDidChangeTextEditorVisibleRanges: never(),
       onDidChangeTextEditorOptions: never(),
       onDidChangeWindowState: never(),
-      onDidChangeActiveColorTheme: never(),
+      onDidChangeActiveColorTheme: onDidChangeColorTheme.event,
       onDidOpenTerminal: never(),
       onDidCloseTerminal: never(),
       onDidChangeActiveTerminal: never(),
