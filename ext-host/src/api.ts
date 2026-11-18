@@ -6,7 +6,7 @@
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { documentFor, documents, onDidChange, onDidClose, onDidOpen, onDidSave, TextDocumentImpl } from "./documents";
+import { documentFor, documents, onDidChange, onDidClose, onDidOpen, onDidSave, saveDocument, TextDocumentImpl } from "./documents";
 import * as dto from "./dto";
 import { matchesGlob } from "./glob";
 import * as providers from "./providers";
@@ -15,6 +15,7 @@ import { host, lookup, onDidChangeColorTheme, onDidChangeConfiguration, type Ext
 import * as types from "./types";
 import * as views from "./views";
 import * as decorations from "./decorations";
+import * as files from "./files";
 import * as tabs from "./tabs";
 import * as virtual from "./virtual";
 import { SURFACE, TOP_LEVEL, type MemberKind } from "./surface";
@@ -931,6 +932,13 @@ export function createApi(description: ExtensionDescription) {
         return rpc.request<boolean>("workspace/applyEdit", dto.workspaceEdit(edit));
       },
       saveAll: () => rpc.request<boolean>("workspace/saveAll", {}),
+      async save(uri: Uri) {
+        return (await saveDocument(uri)) ? uri : undefined;
+      },
+      async saveAs(uri: Uri) {
+        const saved = await rpc.request<string | null>("documents/saveAs", { uri: uri.toString() });
+        return saved ? Uri.parse(saved) : undefined;
+      },
       updateWorkspaceFolders: () => false,
       registerTextDocumentContentProvider: (scheme: string, provider: unknown) => virtual.registerContentProvider(scheme, provider),
       registerFileSystemProvider: (scheme: string, provider: unknown, options?: { isReadonly?: unknown }) =>
@@ -940,15 +948,16 @@ export function createApi(description: ExtensionDescription) {
       onDidCloseTextDocument: onDidClose.event,
       onDidChangeTextDocument: onDidChange.event,
       onDidSaveTextDocument: onDidSave.event,
-      onWillSaveTextDocument: never(),
+      onWillSaveTextDocument: files.onWillSave.event,
       onDidChangeConfiguration: onDidChangeConfiguration.event,
       onDidChangeWorkspaceFolders: never(),
-      onDidCreateFiles: never(),
-      onDidDeleteFiles: never(),
-      onDidRenameFiles: never(),
-      onWillCreateFiles: never(),
-      onWillDeleteFiles: never(),
-      onWillRenameFiles: never(),
+      // Operations the user makes in PowerCode (and `applyEdit` file operations), not `workspace.fs`, as in VS Code.
+      onDidCreateFiles: files.onDidCreate.event,
+      onDidDeleteFiles: files.onDidDelete.event,
+      onDidRenameFiles: files.onDidRename.event,
+      onWillCreateFiles: files.onWillCreate.event,
+      onWillDeleteFiles: files.onWillDelete.event,
+      onWillRenameFiles: files.onWillRename.event,
       // The UI restarts the host when trust is granted, so this never fires within a host.
       onDidGrantWorkspaceTrust: never(),
       onDidOpenNotebookDocument: never(),

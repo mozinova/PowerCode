@@ -6,7 +6,7 @@ import { errorMessage } from "../lib/ipc";
 import { notify } from "../state/notifications";
 import { setting } from "../settings/store";
 import { useSettings } from "../state/settings";
-import { isModelDirty, modelPath, saveModel } from "./models";
+import { isModelDirty, modelPath, SaveReason, saveModel } from "./models";
 import { monaco } from "./monaco";
 
 /** `files.autoSaveDelay`, as in VS Code. */
@@ -22,7 +22,7 @@ export async function saveIfDirty(path: string): Promise<boolean> {
   timers.delete(path);
   if (!isModelDirty(path)) return true;
   try {
-    await saveModel(path);
+    await saveModel(path, SaveReason.AfterDelay);
     failing.delete(path);
     void refreshGit();
     return true;

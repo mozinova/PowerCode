@@ -59,9 +59,30 @@ export function onDidSaveModel(listener: (path: string, model: monaco.editor.ITe
   return () => void saveListeners.delete(listener);
 }
 
-export async function saveModel(path: string) {
+/** Why a document is saved, as `vscode.TextDocumentSaveReason`. */
+export const SaveReason = { Manual: 1, AfterDelay: 2 } as const;
+export type SaveReason = (typeof SaveReason)[keyof typeof SaveReason];
+
+let willSave: ((model: monaco.editor.ITextModel, reason: SaveReason) => Promise<void>) | null = null;
+
+/** Sets what runs before every save, e.g. extensions' `onWillSaveTextDocument` edits. */
+export function setWillSaveParticipant(participant: typeof willSave) {
+  willSave = participant;
+}
+
+/** Runs the save participant; a failing one never stops the save. */
+export async function runWillSave(model: monaco.editor.ITextModel, reason: SaveReason) {
+  try {
+    await willSave?.(model, reason);
+  } catch {
+    // Logged by the participant.
+  }
+}
+
+export async function saveModel(path: string, reason: SaveReason = SaveReason.Manual) {
   const model = getModel(path);
   if (!model) return;
+  await runWillSave(model, reason);
   const version = model.getAlternativeVersionId();
   await fsApi.writeTextFile(path, model.getValue());
   savedVersions.set(path, version);

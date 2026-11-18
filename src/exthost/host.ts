@@ -9,7 +9,8 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { activeEditor } from "../components/EditorArea";
 import { monaco } from "../editor/monaco";
 import { fileUri } from "../editor/uris";
-import { isModelDirty, loadModel, modelPath, onDidSaveModel, saveModel } from "../editor/models";
+import { isModelDirty, loadModel, modelPath, moveModel, onDidSaveModel, saveModel, setWillSaveParticipant } from "../editor/models";
+import { runFileOperation, setFileOperationParticipant, type FileOperation } from "../lib/fileOperations";
 import { useExtensions } from "../extensions/runtime";
 import { activeThemeKind } from "../editor/themes";
 import { errorMessage, fsApi, type InstalledExtension } from "../lib/ipc";
@@ -29,9 +30,11 @@ import {
   webviewTabPath,
 } from "../lib/virtualTabs";
 import {
+  documentModel,
   isVirtualModel,
   isVirtualScheme,
   onDidSaveVirtual,
+  saveDocument,
   registerVirtualDocumentHandlers,
   resetVirtualDocuments,
 } from "./virtualDocuments";
@@ -393,20 +396,26 @@ async function applyWorkspaceEdit(params: {
   operations: { kind: "create" | "delete" | "rename"; uri?: string; from?: string; to?: string }[];
 }): Promise<boolean> {
   try {
+    // File operations notify extensions like the user's own (`onWillRenameFiles`, ...).
     for (const op of params.operations ?? []) {
-      if (op.kind === "create" && op.uri) await fsApi.createFile(pathFromUri(op.uri)).catch(() => {});
-      else if (op.kind === "delete" && op.uri) await fsApi.deletePath(pathFromUri(op.uri));
-      else if (op.kind === "rename" && op.from && op.to) {
+      if (op.kind === "create" && op.uri) {
+        const path = pathFromUri(op.uri);
+        await runFileOperation({ kind: "create", paths: [path] }, () => fsApi.createFile(path).catch(() => {}));
+      } else if (op.kind === "delete" && op.uri) {
+        const path = pathFromUri(op.uri);
+        await runFileOperation({ kind: "delete", paths: [path] }, () => fsApi.deletePath(path));
+      } else if (op.kind === "rename" && op.from && op.to) {
         const from = pathFromUri(op.from);
         const to = pathFromUri(op.to);
-        await fsApi.renamePath(from, to);
+        await runFileOperation({ kind: "rename", pairs: [{ from, to }] }, () => fsApi.renamePath(from, to));
+        moveModel(from, to);
         useWorkspace.getState().renamePaths(from, to);
       }
     }
     const open = openPaths(useWorkspace.getState());
     for (const file of params.edits) {
-      const path = pathFromUri(file.uri);
-      const model = await loadModel(path);
+      // Files, or documents extensions provide.
+      const model = await documentModel(file.uri);
       model.pushStackElement();
       model.pushEditOperations(
         [],
@@ -415,7 +424,8 @@ async function applyWorkspaceEdit(params: {
       );
       model.pushStackElement();
       // Files not open in a tab would keep their edits invisibly; they are saved right away.
-      if (!open.has(path)) await saveModel(path);
+      const path = modelPath(model);
+      if (path !== undefined && !open.has(path)) await saveModel(path);
     }
     useWorkspace.getState().filesChanged();
     return true;
@@ -425,9 +435,58 @@ async function applyWorkspaceEdit(params: {
   }
 }
 
+// ---- Save and file operation participants ------------------------------------------
+
+/** A host answer, or `null` after `ms` (the host limits participants itself; this covers a stuck host). */
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return Promise.race([promise, new Promise<null>((resolve) => setTimeout(() => resolve(null), ms))]);
+}
+
+/** Extensions' `onWillSaveTextDocument` edits (e.g. organize imports), applied before the file is written. */
+async function willSaveDocument(model: monaco.editor.ITextModel, reason: number) {
+  const uri = model.uri.toString();
+  const synced = syncedDocuments.get(uri);
+  if (!rpc.isRunning() || !synced) return;
+  // The host must see the text being saved.
+  synced.flush();
+  const edits = await withTimeout(rpc.request<{ range: RangeDto; newText: string }[]>("documents/willSave", { uri, reason }), 3000);
+  if (!edits?.length || model.isDisposed()) return;
+  model.pushStackElement();
+  model.pushEditOperations([], edits.map((e) => ({ range: toMonacoRange(e.range), text: e.newText })), () => null);
+  model.pushStackElement();
+}
+
+function operationDto(operation: FileOperation) {
+  return operation.kind === "rename"
+    ? { kind: "rename", files: operation.pairs.map((p) => ({ from: fileUri(p.from).toString(), to: fileUri(p.to).toString() })) }
+    : { kind: operation.kind, files: operation.paths.map((p) => ({ uri: fileUri(p).toString() })) };
+}
+
+/** `onWill/onDid(Create|Rename|Delete)Files`: edits extensions want are applied before the operation. */
+const fileOperationParticipant = {
+  async will(operation: FileOperation) {
+    if (!rpc.isRunning()) return;
+    const edit = await withTimeout(rpc.request<Parameters<typeof applyWorkspaceEdit>[0] | null>("files/willOperate", operationDto(operation)), 15_000);
+    if (edit) await applyWorkspaceEdit(edit);
+  },
+  did(operation: FileOperation) {
+    if (rpc.isRunning()) rpc.notify("files/didOperate", operationDto(operation));
+  },
+};
+
+async function saveDocumentAs({ uri }: { uri: string }) {
+  const model = monaco.editor.getModel(monaco.Uri.parse(uri));
+  if (!model) return null;
+  const target = await saveDialog({ defaultPath: modelPath(model) });
+  if (!target) return null;
+  await fsApi.writeTextFile(target, model.getValue());
+  useWorkspace.getState().openFile(target);
+  return fileUri(target).toString();
+}
+
 async function saveAll() {
   const paths = [...openPaths(useWorkspace.getState())].map((p) => parseDiffTab(p) ?? p);
-  await Promise.all(paths.filter(isModelDirty).map(saveModel));
+  await Promise.all(paths.filter(isModelDirty).map((path) => saveModel(path)));
   return true;
 }
 
@@ -759,6 +818,13 @@ function registerHandlers() {
   rpc.onRequest("tabs/close", closeHostTabs);
   rpc.onRequest("workspace/applyEdit", applyWorkspaceEdit);
   rpc.onRequest("workspace/saveAll", saveAll);
+  rpc.onRequest("documents/saveDocument", async ({ uri }) => {
+    // Only documents the editor has (a document only extensions opened has nothing unsaved).
+    if (!monaco.editor.getModel(monaco.Uri.parse(uri))) return false;
+    await saveDocument(uri);
+    return true;
+  });
+  rpc.onRequest("documents/saveAs", saveDocumentAs);
   rpc.onRequest("commands/executeBuiltin", ({ command, args }) => executeBuiltin(command, args ?? []));
   rpc.onRequest("configuration/update", async ({ key, value }) => {
     await setUserSetting(key, value);
@@ -826,6 +892,8 @@ export function startExtensionHost() {
   });
   listenToWebviews();
   setDocumentFlusher((uri) => syncedDocuments.get(uri)?.flush());
+  setWillSaveParticipant(willSaveDocument);
+  setFileOperationParticipant(fileOperationParticipant);
 
   // New models (opened files) are announced once `models.ts` has recorded their path.
   monaco.editor.onDidCreateModel((model) => queueMicrotask(() => openDocument(model)));

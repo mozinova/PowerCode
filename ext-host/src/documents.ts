@@ -1,5 +1,6 @@
 //! Text documents open in PowerCode, mirrored here as `vscode.TextDocument`s.
 
+import * as rpc from "./rpc";
 import { EndOfLine, EventEmitter, Position, Range, Uri } from "./types";
 
 export class TextDocumentImpl {
@@ -102,8 +103,13 @@ export class TextDocumentImpl {
   }
 
   save() {
-    return Promise.resolve(true);
+    return saveDocument(this.uri);
   }
+}
+
+/** Saves an open document through the editor (which runs save participants and writes it). */
+export function saveDocument(uri: Uri): Promise<boolean> {
+  return rpc.request<boolean>("documents/saveDocument", { uri: uri.toString() }).catch(() => false);
 }
 
 export const documents = new Map<string, TextDocumentImpl>();

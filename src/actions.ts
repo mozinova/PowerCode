@@ -14,6 +14,7 @@ import {
   tabFilePath,
 } from "./lib/virtualTabs";
 import { releaseDocumentModels, saveDocument } from "./exthost/virtualDocuments";
+import { runFileOperation } from "./lib/fileOperations";
 import { useSettingsPage } from "./settings/page";
 import { installVsixFiles } from "./extensions/runtime";
 import { customEditorsFor, defaultTabFor, saveCustomEditorTab } from "./exthost/customEditors";
@@ -188,18 +189,15 @@ export function closeActiveTab() {
 }
 
 export async function createEntry(path: string, kind: "file" | "folder") {
-  if (kind === "file") {
-    await fsApi.createFile(path);
-    useWorkspace.getState().openFile(path);
-  } else {
-    await fsApi.createDir(path);
-  }
+  await runFileOperation({ kind: "create", paths: [path] }, () => (kind === "file" ? fsApi.createFile(path) : fsApi.createDir(path)));
+  if (kind === "file") useWorkspace.getState().openFile(path);
   void refreshGit();
 }
 
 /** Renames a file or folder, keeping its open tabs (and their unsaved edits). */
 export async function renameEntry(from: string, to: string) {
-  await fsApi.renamePath(from, to);
+  // Extensions may update references first (e.g. imports of a moved module).
+  await runFileOperation({ kind: "rename", pairs: [{ from, to }] }, () => fsApi.renamePath(from, to));
   for (const path of openPaths(useWorkspace.getState())) {
     if (isWithin(path, from)) moveModel(path, movedPath(path, from, to));
   }
@@ -222,7 +220,7 @@ export async function deleteEntry(path: string, isDir: boolean): Promise<boolean
   });
   if (!confirmed) return false;
   try {
-    await fsApi.deletePath(path);
+    await runFileOperation({ kind: "delete", paths: [path] }, () => fsApi.deletePath(path));
   } catch (e) {
     await message(`Could not delete "${basename(path)}":\n${errorMessage(e)}`, {
       title: "PowerCode",

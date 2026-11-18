@@ -12,6 +12,7 @@ import * as providers from "./providers";
 import * as rpc from "./rpc";
 import * as views from "./views";
 import * as debug from "./debug";
+import * as files from "./files";
 import * as tabs from "./tabs";
 import * as virtual from "./virtual";
 import { collectDefaults, host, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
@@ -378,6 +379,7 @@ views.listen();
 debug.listen();
 virtual.listen();
 tabs.listen();
+files.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

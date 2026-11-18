@@ -3,7 +3,7 @@
 //! URI scheme. Their text comes from the host (`virtual/read`); edits to the
 //! writable ones (file system providers) are saved back (`virtual/write`).
 
-import { disposeModel, isModelDirty, loadModel, saveModel } from "../editor/models";
+import { disposeModel, isModelDirty, loadModel, runWillSave, SaveReason, saveModel } from "../editor/models";
 import { monaco } from "../editor/monaco";
 import { fileUri, uriToPath } from "../editor/uris";
 import { documentTabPath, parseCompareTab, parseDocumentTab } from "../lib/virtualTabs";
@@ -88,6 +88,7 @@ export function onDidSaveVirtual(listener: (uri: string) => void) {
 export async function saveVirtual(uri: string) {
   const model = monaco.editor.getModel(monaco.Uri.parse(uri));
   if (!model || !isVirtualModel(model)) return;
+  await runWillSave(model, SaveReason.Manual);
   const key = model.uri.toString();
   const version = model.getAlternativeVersionId();
   await rpc.request("virtual/write", { uri, text: model.getValue() });
