@@ -12,6 +12,8 @@ import * as providers from "./providers";
 import * as rpc from "./rpc";
 import * as views from "./views";
 import * as debug from "./debug";
+import * as tabs from "./tabs";
+import * as virtual from "./virtual";
 import { collectDefaults, host, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import { EventEmitter, ExtensionMode, Range, Uri } from "./types";
 
@@ -205,9 +207,11 @@ const fired = new Set<string>();
 async function activateByEvent(event: string) {
   if (fired.has(event)) return;
   fired.add(event);
+  // `*` extensions start with the host (the `*` event), not again for each event: an
+  // `executeCommand` in their own `activate` would otherwise wait for itself.
   await Promise.all(
     runnable()
-      .filter((e) => activationEvents(e).some((a) => a === event || a === "*"))
+      .filter((e) => activationEvents(e).includes(event))
       .map(activate),
   );
 }
@@ -314,6 +318,11 @@ rpc.onNotification("documents/open", (params: { uri: string; languageId: string;
 rpc.onNotification("documents/change", (params: { uri: string; version: number; text: string }) => {
   const document = documentFor(params.uri);
   if (!document) return;
+  // A virtual document the host already updated from its provider (see virtual.ts).
+  if (params.text === document.getText()) {
+    document.version = params.version;
+    return;
+  }
   const oldRange = new Range(document.positionAt(0), document.positionAt(document.getText().length));
   const oldLength = document.getText().length;
   document.setText(params.text, params.version);
@@ -367,6 +376,8 @@ rpc.onRequest("shutdown", async () => {
 providers.listen();
 views.listen();
 debug.listen();
+virtual.listen();
+tabs.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

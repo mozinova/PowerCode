@@ -82,6 +82,48 @@ export function parseCustomEditorTab(path: string): { viewType: string; path: st
   return colon > 0 ? { viewType: rest.slice(0, colon), path: rest.slice(colon + 1) } : null;
 }
 
+const DOCUMENT_PREFIX = "document:";
+
+/** A tab showing a document an extension provides (content and file system providers), by URI. */
+export function documentTabPath(uri: string): string {
+  return DOCUMENT_PREFIX + uri;
+}
+
+/** The URI shown by a document tab, or null for any other tab. */
+export function parseDocumentTab(path: string): string | null {
+  return path.startsWith(DOCUMENT_PREFIX) ? path.slice(DOCUMENT_PREFIX.length) : null;
+}
+
+const COMPARE_PREFIX = "compare:";
+
+/** A tab comparing two documents by URI (`vscode.diff`): files or documents extensions provide. */
+export function compareTabPath(original: string, modified: string): string {
+  return COMPARE_PREFIX + JSON.stringify([original, modified]);
+}
+
+/** The documents compared by a compare tab, or null for any other tab. */
+export function parseCompareTab(path: string): { original: string; modified: string } | null {
+  if (!path.startsWith(COMPARE_PREFIX)) return null;
+  try {
+    const [original, modified] = JSON.parse(path.slice(COMPARE_PREFIX.length));
+    return typeof original === "string" && typeof modified === "string" ? { original, modified } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The file name a document or compare tab shows (the modified side's), for its icon. */
+export function uriTabFileName(path: string): string | null {
+  const uri = parseDocumentTab(path) ?? parseCompareTab(path)?.modified;
+  if (!uri) return null;
+  const name = uri.replace(/[?#].*$/, "").split("/").pop() ?? "";
+  try {
+    return decodeURIComponent(name) || null;
+  } catch {
+    return name || null;
+  }
+}
+
 /** The file a tab is about, for tabs that show a file some other way (diffs, custom editors). */
 export function tabFilePath(path: string): string | null {
   return parseDiffTab(path) ?? parseCommitDiffTab(path)?.file ?? parseCustomEditorTab(path)?.path ?? (isVirtualTab(path) ? null : path);
@@ -94,6 +136,8 @@ export function isVirtualTab(path: string): boolean {
     parseCommitDiffTab(path) !== null ||
     parseWebviewTab(path) !== null ||
     parseCustomEditorTab(path) !== null ||
+    parseDocumentTab(path) !== null ||
+    parseCompareTab(path) !== null ||
     path === SETTINGS_TAB
   );
 }

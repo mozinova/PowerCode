@@ -8,11 +8,14 @@ import { isSshPath } from "../lib/remote";
 import {
   isVirtualTab,
   parseCommitDiffTab,
+  parseCompareTab,
   parseCustomEditorTab,
   parseDiffTab,
+  parseDocumentTab,
   parseExtensionTab,
   parseWebviewTab,
   tabFilePath,
+  uriTabFileName,
   SETTINGS_TAB,
 } from "../lib/virtualTabs";
 import { customEditorsFor } from "../exthost/customEditors";
@@ -98,6 +101,8 @@ function TabIcon({ tab }: { tab: EditorTab }) {
   }
   const diffFile = parseDiffTab(tab.path) ?? parseCommitDiffTab(tab.path)?.file ?? parseCustomEditorTab(tab.path)?.path;
   if (diffFile) return <FileIcon name={basename(diffFile)} size={15} />;
+  const uriFile = uriTabFileName(tab.path);
+  if (uriFile) return <FileIcon name={uriFile} size={15} />;
   if (tab.path === SETTINGS_TAB) return <Settings size={15} strokeWidth={1.75} className="shrink-0 text-fg-muted" />;
   return isVirtualTab(tab.path) ? (
     <Blocks size={15} strokeWidth={1.75} className="shrink-0 text-fg-muted" />
@@ -118,7 +123,9 @@ function tabTooltip(tab: EditorTab): string {
   if (commit) return `${commit.file} @ ${commit.hash.slice(0, 8)}`;
   const custom = parseCustomEditorTab(tab.path);
   if (custom) return custom.path;
-  return parseDiffTab(tab.path) ?? tab.path;
+  const compare = parseCompareTab(tab.path);
+  if (compare) return `${compare.original} ↔ ${compare.modified}`;
+  return parseDiffTab(tab.path) ?? parseDocumentTab(tab.path) ?? tab.path;
 }
 
 function Tab({
@@ -207,7 +214,7 @@ function TabsMenu({ group }: { group: EditorGroup }) {
       label: tab.dirty ? `${tab.name} •` : tab.name,
       detail: parseExtensionTab(tab.path)
         ? "Extension"
-        : parseDiffTab(tab.path)
+        : parseDiffTab(tab.path) || parseCompareTab(tab.path)
           ? "Diff"
           : parseCommitDiffTab(tab.path)
             ? "Commit"

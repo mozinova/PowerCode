@@ -6,14 +6,19 @@ import { loadModel, modelPath } from "../editor/models";
 import { errorMessage } from "../lib/ipc";
 import { mediaKind } from "../lib/media";
 import {
+  documentTabPath,
   isVirtualTab,
   parseCommitDiffTab,
+  parseCompareTab,
   parseCustomEditorTab,
   parseDiffTab,
+  parseDocumentTab,
   parseExtensionTab,
   parseWebviewTab,
   SETTINGS_TAB,
 } from "../lib/virtualTabs";
+import { documentModel, isVirtualScheme } from "../exthost/virtualDocuments";
+import { CompareView } from "./CompareView";
 import { SettingsPage } from "./SettingsPage";
 import { CustomEditorView } from "./CustomEditorView";
 import { attachGitGutter } from "../git/gutter";
@@ -45,10 +50,18 @@ export function activeEditor(): monaco.editor.IStandaloneCodeEditor | undefined 
 // Go to Definition and peek "open" targets in other files as tabs.
 monaco.editor.registerEditorOpener({
   openCodeEditor(_source, resource, selectionOrPosition) {
-    if (resource.scheme !== "file" && resource.scheme !== "ssh") return false;
-    const model = monaco.editor.getModel(resource);
-    const path = (model && modelPath(model)) ?? uriToPath(resource);
     const { openFile, openFileAt } = useWorkspace.getState();
+    let path: string;
+    if (isVirtualScheme(resource.scheme)) {
+      // A document an extension provides (e.g. a definition in generated code).
+      path = documentTabPath(resource.toString());
+      openFile(path, resource.path.split("/").pop() || resource.toString());
+    } else if (resource.scheme === "file" || resource.scheme === "ssh") {
+      const model = monaco.editor.getModel(resource);
+      path = (model && modelPath(model)) ?? uriToPath(resource);
+    } else {
+      return false;
+    }
     if (!selectionOrPosition) openFile(path);
     else if (monaco.Range.isIRange(selectionOrPosition)) {
       const r = selectionOrPosition;
@@ -192,15 +205,16 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       viewStates.set(viewKey(group.id, previous), editor.saveViewState());
     }
 
-    // Media files and pages are shown on top of an empty editor.
-    if (!activePath || isVirtualTab(activePath) || mediaKind(activePath)) {
+    // Media files and pages are shown on top of an empty editor; extension documents are text.
+    const document = activePath ? parseDocumentTab(activePath) : null;
+    if (!activePath || (!document && (isVirtualTab(activePath) || mediaKind(activePath)))) {
       shownPathRef.current = null;
       editor.setModel(null);
       return;
     }
 
     let cancelled = false;
-    loadModel(activePath).then(
+    (document ? documentModel(document) : loadModel(activePath)).then(
       (model) => {
         if (cancelled) return;
         shownPathRef.current = activePath;
@@ -251,7 +265,9 @@ function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean 
   const commitDiff = activePath ? parseCommitDiffTab(activePath) : null;
   const webview = activePath ? parseWebviewTab(activePath) : null;
   const custom = activePath ? parseCustomEditorTab(activePath) : null;
+  const compare = activePath ? parseCompareTab(activePath) : null;
   const media = activePath && !isVirtualTab(activePath) ? mediaKind(activePath) : null;
+  const title = group.tabs.find((t) => t.path === activePath)?.name ?? "";
 
   return (
     // Any click inside a group (tabs, editor, pages) focuses it.
@@ -264,6 +280,7 @@ function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean 
         {extension && <ExtensionPage key={activePath} namespace={extension.namespace} name={extension.name} />}
         {diff && <DiffView key={diff} path={diff} />}
         {commitDiff && <DiffView key={activePath} path={commitDiff.file} revision={commitDiff.hash} />}
+        {compare && <CompareView key={activePath} original={compare.original} modified={compare.modified} title={title} />}
         {activePath === SETTINGS_TAB && <SettingsPage />}
         {custom && activePath && (
           <div className="absolute inset-0 bg-editor">

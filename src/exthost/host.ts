@@ -16,7 +16,25 @@ import { errorMessage, fsApi, type InstalledExtension } from "../lib/ipc";
 import { basename } from "../lib/paths";
 import { remoteLabel, remoteOf } from "../lib/remote";
 import { createTranslator, type RemoteMapping } from "./remoteUris";
-import { parseDiffTab, parseWebviewTab, webviewTabPath } from "../lib/virtualTabs";
+import {
+  compareTabPath,
+  documentTabPath,
+  parseCommitDiffTab,
+  parseCompareTab,
+  parseCustomEditorTab,
+  parseDiffTab,
+  parseDocumentTab,
+  parseWebviewTab,
+  isVirtualTab,
+  webviewTabPath,
+} from "../lib/virtualTabs";
+import {
+  isVirtualModel,
+  isVirtualScheme,
+  onDidSaveVirtual,
+  registerVirtualDocumentHandlers,
+  resetVirtualDocuments,
+} from "./virtualDocuments";
 import { track } from "../state/activity";
 import { ask, notify } from "../state/notifications";
 import { useTrust } from "../state/trust";
@@ -27,10 +45,11 @@ import { pathFromUri, registerProvider, resetLanguageFeatures, setDiagnostics, s
 import * as rpc from "./rpc";
 import { openUserSettings, userSettingsPath } from "./settings";
 import { loadUserSettings, setUserSetting, useUserSettings } from "../settings/store";
-import { openSettings } from "../actions";
+import { closeTabs, openSettings } from "../actions";
 import { appendOutput, log, useExtensionHost, type ContributedCommand, type StatusItem } from "./state";
 import { contributions, registerViewHandlers, resetViews, setConfigurationContext } from "./views";
 import { registerCustomEditorHandlers, resetCustomEditors } from "./customEditors";
+import { registerDecorationHandlers, resetDecorations } from "./decorations";
 import { syncToHost as syncBreakpointsToHost } from "../debug/breakpoints";
 import { registerDebugHover } from "../debug/editor";
 import { registerDebugHandlers, resetDebug } from "../debug/model";
@@ -105,11 +124,14 @@ function forgetHostState() {
   cancelAllDialogs();
   syncedDocuments.forEach((d) => d.dispose());
   syncedDocuments.clear();
+  lastTabs = "";
   progressEnds.forEach((end) => end());
   progressEnds.clear();
   terminals.clear();
   useExtensionHost.setState({ statusItems: [], statusMessage: "", commands: [] });
   resetViews();
+  resetDecorations();
+  resetVirtualDocuments();
   resetCustomEditors();
   resetDebug();
   resetContextKeys();
@@ -193,6 +215,7 @@ async function start(key: string, extensions: InstalledExtension[], root: string
       setConfigurationContext(settings, result.defaults);
       useExtensionHost.setState({ commands: result.commands, status: "running" });
       for (const model of monaco.editor.getModels()) openDocument(model);
+      sendTabs();
       sendActiveEditor();
       syncBreakpointsToHost();
       rpc.notify("start");
@@ -268,8 +291,8 @@ const CHANGE_DELAY_MS = 120;
 
 function openDocument(model: monaco.editor.ITextModel) {
   const uri = model.uri.toString();
-  // Only files: diff originals and other virtual models stay out.
-  if (!rpc.isRunning() || syncedDocuments.has(uri) || modelPath(model) === undefined) return;
+  // Files and extensions' documents: diff originals and other internal models stay out.
+  if (!rpc.isRunning() || syncedDocuments.has(uri) || (modelPath(model) === undefined && !isVirtualModel(model))) return;
   rpc.notify("documents/open", { uri, languageId: model.getLanguageId(), version: model.getVersionId(), text: model.getValue() });
 
   let timer: number | undefined;
@@ -314,7 +337,7 @@ function sendActiveEditor() {
   const model = editor?.getModel();
   const selection = editor?.getSelection();
   rpc.notify("editor/active", {
-    uri: model && modelPath(model) !== undefined ? model.uri.toString() : null,
+    uri: model && (modelPath(model) !== undefined || isVirtualModel(model)) ? model.uri.toString() : null,
     selection: selection
       ? {
           start: { line: selection.startLineNumber - 1, character: selection.startColumn - 1 },
@@ -417,9 +440,18 @@ async function executeBuiltin(command: string, args: any[]): Promise<unknown> {
       return null;
     case "vscode.open":
     case "vscode.openWith": {
-      const path = uriArg(args[0]);
-      if (path) useWorkspace.getState().openFile(path);
-      else if (typeof args[0]?.$uri === "string") await openUrl(args[0].$uri);
+      const uri = typeof args[0]?.$uri === "string" ? (args[0].$uri as string) : undefined;
+      if (uri && isVirtualScheme(monaco.Uri.parse(uri).scheme)) revealUri(uri);
+      else if (uri && /^(file|ssh):/.test(uri)) useWorkspace.getState().openFile(uriArg(args[0])!);
+      else if (uri) await openUrl(uri);
+      return null;
+    }
+    case "vscode.diff": {
+      // (left, right, title?, options?): files or extension documents, side by side.
+      const [left, right, title] = args;
+      if (typeof left?.$uri !== "string" || typeof right?.$uri !== "string") throw new Error("vscode.diff needs two URIs");
+      const name = typeof title === "string" && title ? title : `${uriFileName(left.$uri)} ↔ ${uriFileName(right.$uri)}`;
+      useWorkspace.getState().openFile(compareTabPath(left.$uri, right.$uri), name);
       return null;
     }
     case "workbench.action.files.save":
@@ -487,7 +519,7 @@ function showView(viewId: string) {
 }
 
 /** Webview panels the host has open, by id, with their tab title and icon; closing their last tab disposes them. */
-const panels = new Map<string, { title: string; icon?: string }>();
+const panels = new Map<string, { title: string; icon?: string; viewType?: string }>();
 
 function revealPanel(id: string) {
   const panel = panels.get(id);
@@ -509,8 +541,8 @@ function registerWebviewHandlers() {
   rpc.onNotification("webview/html", ({ id, html, extension }) => setWebviewHtml(id, html, extension));
   rpc.onNotification("webview/options", ({ id, options }) => setWebviewOptions(id, options));
   rpc.onNotification("webview/postMessage", ({ id, message }) => postToWebview(id, message));
-  rpc.onNotification("webview/createPanel", ({ id, title }) => {
-    panels.set(id, { title });
+  rpc.onNotification("webview/createPanel", ({ id, title, viewType }) => {
+    panels.set(id, { title, viewType });
     revealPanel(id);
   });
   rpc.onNotification("webview/title", ({ id, title }) => {
@@ -552,8 +584,57 @@ function registerWebviewHandlers() {
   });
 }
 
+// ---- Tabs (`window.tabGroups`) -----------------------------------------------------
+
+/** What a tab shows, as `TabInputText`, `TabInputTextDiff`, ... */
+function tabInput(path: string) {
+  const webview = parseWebviewTab(path);
+  if (webview) return { kind: "webview", viewType: panels.get(webview)?.viewType ?? webview };
+  const custom = parseCustomEditorTab(path);
+  if (custom) return { kind: "custom", uri: fileUri(custom.path).toString(), viewType: custom.viewType };
+  const compare = parseCompareTab(path);
+  if (compare) return { kind: "diff", original: compare.original, modified: compare.modified };
+  const diff = parseDiffTab(path) ?? parseCommitDiffTab(path)?.file;
+  if (diff) {
+    const file = fileUri(diff);
+    // The committed side as VS Code's git extension names it.
+    const original = file.with({ scheme: "git", query: JSON.stringify({ path: file.fsPath, ref: parseCommitDiffTab(path)?.hash ?? "HEAD" }) });
+    return { kind: "diff", original: original.toString(), modified: file.toString() };
+  }
+  const document = parseDocumentTab(path);
+  if (document) return { kind: "text", uri: document };
+  if (isVirtualTab(path)) return { kind: "other" };
+  return { kind: "text", uri: fileUri(path).toString() };
+}
+
+let lastTabs = "";
+
+/** Tells the host about the editor groups and their tabs, if they changed. */
+function sendTabs(state = useWorkspace.getState()) {
+  if (!rpc.isRunning()) return;
+  const groups = state.groups.map((g) => ({
+    id: g.id,
+    isActive: g.id === state.activeGroup,
+    tabs: g.tabs.map((t) => ({ id: t.path, label: t.name, isActive: t.path === g.activePath, isDirty: t.dirty, input: tabInput(t.path) })),
+  }));
+  const json = JSON.stringify(groups);
+  if (json === lastTabs) return;
+  lastTabs = json;
+  rpc.notify("tabs/changed", { groups });
+}
+
+/** `TabGroups.close`: tabs by group, asking about unsaved edits as the user closing them would. */
+async function closeHostTabs({ tabs }: { tabs: { group: number; id: string }[] }) {
+  const byGroup = new Map<number, string[]>();
+  for (const tab of tabs ?? []) byGroup.set(tab.group, [...(byGroup.get(tab.group) ?? []), tab.id]);
+  for (const [group, paths] of byGroup) await closeTabs(paths, group);
+  return true;
+}
+
 function registerHandlers() {
   registerWebviewHandlers();
+  registerDecorationHandlers(rpc.onNotification);
+  registerVirtualDocumentHandlers(rpc.onNotification);
   registerDebugHandlers();
   registerCustomEditorHandlers();
   registerViewHandlers(showView, (id) => disposeWebview(id));
@@ -647,6 +728,10 @@ function registerHandlers() {
   rpc.onRequest("window/showQuickPick", (params) => showQuickPick(params));
   rpc.onRequest("window/showInputBox", (params) => showInputBox(params));
   rpc.onRequest("window/showTextDocument", async ({ uri, selection }) => {
+    if (isVirtualScheme(monaco.Uri.parse(uri).scheme)) {
+      revealUri(uri, selection);
+      return null;
+    }
     const path = pathFromUri(uri);
     await loadModel(path);
     reveal(path, selection);
@@ -659,7 +744,8 @@ function registerHandlers() {
   });
   rpc.onRequest("window/showSaveDialog", ({ title }) => saveDialog({ title }));
   rpc.onRequest("editor/reveal", ({ uri, range }) => {
-    reveal(pathFromUri(uri), range);
+    if (isVirtualScheme(monaco.Uri.parse(uri).scheme)) revealUri(uri, range);
+    else reveal(pathFromUri(uri), range);
     return null;
   });
   rpc.onRequest("editor/insertSnippet", ({ uri, range, snippet }) => {
@@ -670,6 +756,7 @@ function registerHandlers() {
     return true;
   });
 
+  rpc.onRequest("tabs/close", closeHostTabs);
   rpc.onRequest("workspace/applyEdit", applyWorkspaceEdit);
   rpc.onRequest("workspace/saveAll", saveAll);
   rpc.onRequest("commands/executeBuiltin", ({ command, args }) => executeBuiltin(command, args ?? []));
@@ -694,6 +781,20 @@ function reveal(path: string, range?: RangeDto) {
   const { openFile, openFileAt } = useWorkspace.getState();
   if (!range) return openFile(path);
   openFileAt(path, range.start.line + 1, range.start.character + 1, range.end.character + 1, range.end.line + 1);
+}
+
+/** The file name in a URI's path, for tab titles. */
+function uriFileName(uri: string) {
+  const parsed = monaco.Uri.parse(uri);
+  return parsed.path.split("/").pop() || uri;
+}
+
+/** Shows a document an extension provides in its own tab (named after the URI's file name). */
+function revealUri(uri: string, range?: RangeDto) {
+  // The model's spelling of the URI, so the tab and the model agree (see virtualDocuments.ts).
+  const path = documentTabPath(monaco.Uri.parse(uri).toString());
+  useWorkspace.getState().openFile(path, uriFileName(uri));
+  if (range) reveal(path, range);
 }
 
 function detectLanguage(path: string): string {
@@ -735,6 +836,10 @@ export function startExtensionHost() {
     // Edits saved in settings.json reach the store (and from it, extensions and the editor).
     if (path === (await userSettingsPath())) void loadUserSettings();
   });
+  onDidSaveVirtual((uri) => {
+    syncedDocuments.get(uri)?.flush();
+    if (rpc.isRunning() && syncedDocuments.has(uri)) rpc.notify("documents/save", { uri });
+  });
 
   // The active editor: tab switches, group focus and cursor moves (debounced).
   let activeTimer: number | undefined;
@@ -746,6 +851,8 @@ export function startExtensionHost() {
     if (s.activePath !== previous.activePath || s.activeGroup !== previous.activeGroup || s.cursor !== previous.cursor) {
       activeChanged();
     }
+    // Right away: extensions wait for the tab a command just opened (e.g. Claude Code's diffs).
+    if (s.groups !== previous.groups || s.activeGroup !== previous.activeGroup) sendTabs(s);
     if (s.root !== previous.root) scheduleSync();
   });
   // Installing, updating or uninstalling an extension with code restarts the host.

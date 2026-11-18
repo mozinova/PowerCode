@@ -3,7 +3,17 @@ import { disposeAllModels, disposeModel, moveModel, saveModel } from "./editor/m
 import { errorMessage, fsApi, remoteApi } from "./lib/ipc";
 import { basename, isWithin, movedPath } from "./lib/paths";
 import { remoteLabel, remoteOf } from "./lib/remote";
-import { SETTINGS_TAB, customEditorTabPath, extensionTabPath, parseCustomEditorTab, parseDiffTab, tabFilePath } from "./lib/virtualTabs";
+import {
+  SETTINGS_TAB,
+  customEditorTabPath,
+  extensionTabPath,
+  parseCompareTab,
+  parseCustomEditorTab,
+  parseDiffTab,
+  parseDocumentTab,
+  tabFilePath,
+} from "./lib/virtualTabs";
+import { releaseDocumentModels, saveDocument } from "./exthost/virtualDocuments";
 import { useSettingsPage } from "./settings/page";
 import { installVsixFiles } from "./extensions/runtime";
 import { customEditorsFor, defaultTabFor, saveCustomEditorTab } from "./exthost/customEditors";
@@ -112,8 +122,11 @@ export async function saveActive() {
   if (!active) return;
   // A diff tab saves the file it compares (when it is open with edits).
   const path = parseDiffTab(active) ?? active;
+  // Extension documents and `vscode.diff` tabs (their modified side) save by URI.
+  const document = parseDocumentTab(active) ?? parseCompareTab(active)?.modified;
   try {
     if (parseCustomEditorTab(active)) await saveCustomEditorTab(active);
+    else if (document) await saveDocument(document);
     else await saveModel(path);
     void refreshGit();
   } catch (e) {
@@ -132,6 +145,7 @@ export function closeTab(path: string, group?: number) {
 function releaseModels(paths: string[]) {
   const stillOpen = openPaths(useWorkspace.getState());
   for (const path of paths) if (!stillOpen.has(path)) disposeModel(path);
+  releaseDocumentModels();
 }
 
 /**

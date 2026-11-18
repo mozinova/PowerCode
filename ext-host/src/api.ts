@@ -14,6 +14,9 @@ import * as rpc from "./rpc";
 import { host, lookup, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import * as types from "./types";
 import * as views from "./views";
+import * as decorations from "./decorations";
+import * as tabs from "./tabs";
+import * as virtual from "./virtual";
 import { SURFACE, TOP_LEVEL, type MemberKind } from "./surface";
 import { createDebugApi } from "./debug";
 
@@ -182,7 +185,9 @@ function textEditor(document: TextDocumentImpl, selections: Selection[]) {
         snippet: snippet.value,
       });
     },
-    setDecorations() {},
+    setDecorations(type: { key: string }, items: any[]) {
+      decorations.setDecorations(document.uri, type, items, dto.range);
+    },
     revealRange(range: Range) {
       void rpc.request("editor/reveal", { uri: document.uri.toString(), range: dto.range(range), select: false });
     },
@@ -476,7 +481,8 @@ export async function openTextDocument(target?: Uri | string | { language?: stri
   const uri = typeof target === "string" ? Uri.file(target) : target;
   const existing = documentFor(uri);
   if (existing) return existing;
-  const text = await fsp.readFile(uri.fsPath, "utf8");
+  // Documents of `registerTextDocumentContentProvider` / `registerFileSystemProvider` schemes.
+  const text = virtual.isVirtualScheme(uri.scheme) ? await virtual.read(uri) : await fsp.readFile(uri.fsPath, "utf8");
   const languageId = await rpc.request<string>("languages/detect", { uri: uri.toString() }).catch(() => "plaintext");
   const document = new TextDocumentImpl(uri, languageId ?? "plaintext", 1, text);
   documents.set(uri.toString(), document);
@@ -573,8 +579,13 @@ function createFileSystemWatcher(pattern: string | RelativePattern, ignoreCreate
   };
 }
 
+/** The `FileSystemProvider` an extension registered for `uri`'s scheme; files use Node's fs. */
+const providerOf = (uri: Uri) => (uri.scheme === "file" ? undefined : virtual.fileSystemFor(uri)?.provider);
+
 const workspaceFs = {
   async stat(uri: Uri) {
+    const provider = providerOf(uri);
+    if (provider) return provider.stat(uri);
     const s = await fsp.stat(uri.fsPath);
     return {
       type: s.isDirectory() ? FileType.Directory : s.isFile() ? FileType.File : FileType.Unknown,
@@ -584,16 +595,51 @@ const workspaceFs = {
     };
   },
   async readDirectory(uri: Uri) {
+    const provider = providerOf(uri);
+    if (provider) return provider.readDirectory(uri);
     const entries = await fsp.readdir(uri.fsPath, { withFileTypes: true });
     return entries.map((e) => [e.name, e.isDirectory() ? FileType.Directory : FileType.File]);
   },
-  readFile: async (uri: Uri) => new Uint8Array(await fsp.readFile(uri.fsPath)),
-  writeFile: (uri: Uri, content: Uint8Array) => fsp.writeFile(uri.fsPath, content),
-  createDirectory: (uri: Uri) => fsp.mkdir(uri.fsPath, { recursive: true }).then(() => undefined),
-  delete: (uri: Uri, options?: { recursive?: boolean }) => fsp.rm(uri.fsPath, { recursive: options?.recursive ?? false, force: false }),
-  rename: (from: Uri, to: Uri) => fsp.rename(from.fsPath, to.fsPath),
-  copy: (from: Uri, to: Uri) => fsp.cp(from.fsPath, to.fsPath, { recursive: true }),
-  isWritableFileSystem: (scheme: string) => scheme === "file",
+  async readFile(uri: Uri) {
+    const provider = providerOf(uri);
+    return provider ? provider.readFile(uri) : new Uint8Array(await fsp.readFile(uri.fsPath));
+  },
+  async writeFile(uri: Uri, content: Uint8Array) {
+    const provider = providerOf(uri);
+    if (provider) return provider.writeFile(uri, content, { create: true, overwrite: true });
+    await fsp.writeFile(uri.fsPath, content);
+  },
+  async createDirectory(uri: Uri) {
+    const provider = providerOf(uri);
+    if (provider) return provider.createDirectory(uri);
+    await fsp.mkdir(uri.fsPath, { recursive: true });
+  },
+  async delete(uri: Uri, options?: { recursive?: boolean; useTrash?: boolean }) {
+    const provider = providerOf(uri);
+    if (provider) return provider.delete(uri, { recursive: options?.recursive ?? false, useTrash: false });
+    await fsp.rm(uri.fsPath, { recursive: options?.recursive ?? false, force: false });
+  },
+  async rename(from: Uri, to: Uri, options?: { overwrite?: boolean }) {
+    const provider = providerOf(from);
+    if (provider && from.scheme === to.scheme) return provider.rename(from, to, { overwrite: options?.overwrite ?? false });
+    if (provider || providerOf(to)) {
+      await workspaceFs.copy(from, to, options);
+      return workspaceFs.delete(from, { recursive: true });
+    }
+    await fsp.rename(from.fsPath, to.fsPath);
+  },
+  async copy(from: Uri, to: Uri, options?: { overwrite?: boolean }) {
+    const provider = providerOf(from);
+    if (provider?.copy && from.scheme === to.scheme) return provider.copy(from, to, { overwrite: options?.overwrite ?? false });
+    // Across schemes (or without `copy`): a file's bytes.
+    if (provider || providerOf(to)) return workspaceFs.writeFile(to, await workspaceFs.readFile(from));
+    await fsp.cp(from.fsPath, to.fsPath, { recursive: true });
+  },
+  isWritableFileSystem(scheme: string) {
+    if (scheme === "file") return true;
+    const fs = virtual.fileSystemFor(Uri.from({ scheme, path: "/" }));
+    return fs ? !fs.readonly : undefined;
+  },
 };
 
 // ---- Misc helpers -------------------------------------------------------------
@@ -774,7 +820,7 @@ export function createApi(description: ExtensionDescription) {
         return { kind: host.colorThemeKind };
       },
       state: { focused: true, active: true },
-      tabGroups: { all: [], activeTabGroup: { tabs: [] }, onDidChangeTabs: never(), onDidChangeTabGroups: never() },
+      tabGroups: tabs.tabGroups,
       onDidChangeActiveTextEditor: onDidChangeActiveTextEditor.event,
       onDidChangeVisibleTextEditors: onDidChangeVisibleTextEditors.event,
       onDidChangeTextEditorSelection: onDidChangeTextEditorSelection.event,
@@ -828,7 +874,7 @@ export function createApi(description: ExtensionDescription) {
           dispose: () => rpc.notify("terminal/dispose", { id }),
         };
       },
-      createTextEditorDecorationType: () => ({ key: `decoration#${nextOutput++}`, dispose() {} }),
+      createTextEditorDecorationType: (options: unknown) => decorations.createDecorationType(options),
       registerUriHandler: () => new Disposable(() => {}),
       registerTreeDataProvider(viewId: string, treeDataProvider: unknown) {
         const view = views.registerTree(viewId, { treeDataProvider });
@@ -886,8 +932,9 @@ export function createApi(description: ExtensionDescription) {
       },
       saveAll: () => rpc.request<boolean>("workspace/saveAll", {}),
       updateWorkspaceFolders: () => false,
-      registerTextDocumentContentProvider: () => new Disposable(() => {}),
-      registerFileSystemProvider: () => new Disposable(() => {}),
+      registerTextDocumentContentProvider: (scheme: string, provider: unknown) => virtual.registerContentProvider(scheme, provider),
+      registerFileSystemProvider: (scheme: string, provider: unknown, options?: { isReadonly?: unknown }) =>
+        virtual.registerFileSystem(scheme, provider, options),
       registerTaskProvider: () => new Disposable(() => {}),
       onDidOpenTextDocument: onDidOpen.event,
       onDidCloseTextDocument: onDidClose.event,

@@ -10,7 +10,7 @@ import { monaco } from "../editor/monaco";
 export type RemoteMapping = { kind: "ssh"; host: string } | { kind: "wsl"; distro: string };
 
 /** Fields holding URIs (`file:` on the host side). */
-const URI_KEYS = new Set(["uri", "$uri", "from", "to", "target", "resourceUri", "uris"]);
+const URI_KEYS = new Set(["uri", "$uri", "from", "to", "target", "resourceUri", "uris", "original", "modified"]);
 /** Fields holding file system paths (DAP sources, terminals' folders, breakpoints, ...). */
 const PATH_KEYS = new Set(["path", "file", "cwd"]);
 /** Content that must stay exactly as written. */
