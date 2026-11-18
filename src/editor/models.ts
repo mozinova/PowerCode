@@ -1,4 +1,5 @@
 import { monaco } from "./monaco";
+import { fileUri } from "./uris";
 import { fsApi } from "../lib/ipc";
 import { useWorkspace } from "../state/workspace";
 
@@ -9,7 +10,7 @@ const pending = new Map<string, Promise<monaco.editor.ITextModel>>();
 const paths = new Map<string, string>();
 
 export function getModel(path: string) {
-  return monaco.editor.getModel(monaco.Uri.file(path));
+  return monaco.editor.getModel(fileUri(path));
 }
 
 function isDirty(path: string, model: monaco.editor.ITextModel) {
@@ -19,7 +20,7 @@ function isDirty(path: string, model: monaco.editor.ITextModel) {
 function createModel(path: string, text: string, dirty: boolean) {
   // The language is inferred from the file name, including languages
   // contributed by extensions.
-  const model = monaco.editor.createModel(text, undefined, monaco.Uri.file(path));
+  const model = monaco.editor.createModel(text, undefined, fileUri(path));
   paths.set(model.uri.toString(), path);
   model.onWillDispose(() => paths.delete(model.uri.toString()));
   // A version id that never occurs keeps the model dirty until saved.

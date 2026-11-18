@@ -19,6 +19,7 @@ import { CustomEditorView } from "./CustomEditorView";
 import { attachGitGutter } from "../git/gutter";
 import { attachDebugger } from "../debug/editor";
 import { editorOptions, followEditorSettings } from "../editor/options";
+import { uriToPath } from "../editor/uris";
 import { useWorkspace, type EditorGroup } from "../state/workspace";
 import { DiffView } from "./DiffView";
 import { EditorTabs } from "./EditorTabs";
@@ -44,9 +45,9 @@ export function activeEditor(): monaco.editor.IStandaloneCodeEditor | undefined 
 // Go to Definition and peek "open" targets in other files as tabs.
 monaco.editor.registerEditorOpener({
   openCodeEditor(_source, resource, selectionOrPosition) {
-    if (resource.scheme !== "file") return false;
+    if (resource.scheme !== "file" && resource.scheme !== "ssh") return false;
     const model = monaco.editor.getModel(resource);
-    const path = (model && modelPath(model)) ?? resource.fsPath;
+    const path = (model && modelPath(model)) ?? uriToPath(resource);
     const { openFile, openFileAt } = useWorkspace.getState();
     if (!selectionOrPosition) openFile(path);
     else if (monaco.Range.isIRange(selectionOrPosition)) {

@@ -12,10 +12,10 @@ use tauri::{AppHandle, Manager};
 
 use crate::error::{err, CmdResult};
 
-const OPEN_VSX_API: &str = "https://open-vsx.org/api";
+pub(crate) const OPEN_VSX_API: &str = "https://open-vsx.org/api";
 const MAX_VSIX_BYTES: usize = 200 * 1024 * 1024;
 
-fn http() -> &'static reqwest::Client {
+pub(crate) fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()

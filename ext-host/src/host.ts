@@ -264,6 +264,8 @@ rpc.onRequest("initialize", async (params: any) => {
   host.logPath = params.logPath;
   host.webviewOrigin = params.webviewOrigin ?? "";
   host.colorThemeKind = params.colorThemeKind ?? 2;
+  host.remote = params.remote ?? null;
+  host.localExtensionPaths = params.localExtensionPaths ?? {};
   return {
     // Commands contributed by extensions with code, for the command palette.
     commands: runnable().flatMap((e) =>

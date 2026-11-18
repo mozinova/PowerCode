@@ -10,13 +10,33 @@ import { CancellationTokenSource, Disposable, EventEmitter, MarkdownString, Them
 
 // ---- Icons ----------------------------------------------------------------------
 
+/**
+ * On a remote host, a file inside an extension's folder as the same file in the
+ * UI machine's copy of that extension (same version), or undefined.
+ */
+export function localExtensionFile(fsPath: string): string | undefined {
+  if (!host.remote) return undefined;
+  for (const ext of host.extensions) {
+    const local = host.localExtensionPaths[ext.id];
+    if (!local || !(fsPath === ext.path || fsPath.startsWith(`${ext.path}/`))) continue;
+    const relative = fsPath.slice(ext.path.length).replace(/^\//, "");
+    const separator = /^[A-Za-z]:\\|^\\\\/.test(local) ? "\\" : "/";
+    return relative ? `${local}${separator}${relative.split("/").join(separator)}` : local;
+  }
+  return undefined;
+}
+
 /** `iconPath` values: a Uri, a path, `{ light, dark }` or a ThemeIcon. */
-export function iconDto(icon: any): { themeIcon: string; color?: string } | { uri: string } | undefined {
+export function iconDto(icon: any): { themeIcon: string; color?: string } | { uri: string } | { localPath: string } | undefined {
   if (!icon) return undefined;
   if (icon instanceof ThemeIcon || (typeof icon.id === "string" && !Uri.isUri(icon))) {
     const color = icon.color instanceof ThemeColor ? icon.color.id : icon.color?.id;
     return { themeIcon: icon.id, color };
   }
+  // Icons in an extension's folder come from the UI machine's copy (the remote's files are not there).
+  const fsPath = typeof icon === "string" ? icon : Uri.isUri(icon) && icon.scheme === "file" ? icon.fsPath : undefined;
+  const local = fsPath ? localExtensionFile(fsPath) : undefined;
+  if (local) return { localPath: local };
   if (typeof icon === "string") return { uri: Uri.file(icon).toString() };
   if (Uri.isUri(icon)) return { uri: icon.toString() };
   if (icon.dark) return iconDto(icon.dark);
@@ -232,9 +252,18 @@ function webviewOrigin(): Uri {
 function asWebviewUri(uri: Uri): Uri {
   if (uri.scheme !== "file") return uri;
   const origin = webviewOrigin();
+  const at = (path: string) => Uri.from({ scheme: origin.scheme, authority: origin.authority, path });
+  if (host.remote) {
+    // An extension's own files come from the UI machine's copy of it.
+    const local = localExtensionFile(uri.fsPath);
+    if (local) return at(`/file/${local.replace(/\\/g, "/").replace(/^\//, "")}`);
+    // Other files: through the WSL share (`/file///wsl.localhost/...`) or the SSH session.
+    if (host.remote.kind === "wsl") return at(`/file///wsl.localhost/${host.remote.distro}${uri.path}`);
+    return at(`/ssh/${host.remote.host}${uri.path}`);
+  }
   // `/file/C:/dir/a.js` on Windows, `/file/home/me/a.js` elsewhere (see src-tauri/src/webview.rs).
   const local = uri.fsPath.replace(/\\/g, "/").replace(/^\//, "");
-  return Uri.from({ scheme: origin.scheme, authority: origin.authority, path: `/file/${local}` });
+  return at(`/file/${local}`);
 }
 
 function createWebview(id: string, extensionId: string, initialOptions: any) {

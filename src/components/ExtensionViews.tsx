@@ -19,7 +19,7 @@ import {
 } from "../exthost/views";
 import { useContextKeys } from "../exthost/when";
 import { getModel } from "../editor/models";
-import { monaco } from "../editor/monaco";
+import { fileUri } from "../editor/uris";
 import { basename } from "../lib/paths";
 import { isVirtualTab, parseWebviewTab } from "../lib/virtualTabs";
 import { notify } from "../state/notifications";
@@ -423,7 +423,7 @@ export function EditorTitleActions({ path }: { path: string | null }) {
     editorTextFocus: false,
   };
   const { inline, other } = menuItems(contributions, "editor/title", (when) => isTrue(when, context));
-  const args = isFile ? [{ $uri: monaco.Uri.file(path).toString() }] : [];
+  const args = isFile ? [{ $uri: fileUri(path).toString() }] : [];
   if (inline.length === 0 && other.length === 0) return null;
   return (
     <div className="flex shrink-0 items-center gap-0.5 pr-0.5">

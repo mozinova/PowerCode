@@ -2,18 +2,20 @@
 //! installed extensions that have code, keeps its documents in sync with the
 //! editor, and answers what it asks of the UI (see ext-host/src/api.ts).
 
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { activeEditor } from "../components/EditorArea";
 import { monaco } from "../editor/monaco";
+import { fileUri } from "../editor/uris";
 import { isModelDirty, loadModel, modelPath, onDidSaveModel, saveModel } from "../editor/models";
 import { useExtensions } from "../extensions/runtime";
 import { activeThemeKind } from "../editor/themes";
 import { errorMessage, fsApi, type InstalledExtension } from "../lib/ipc";
 import { basename } from "../lib/paths";
-import { remoteOf } from "../lib/remote";
+import { remoteLabel, remoteOf } from "../lib/remote";
+import { createTranslator, type RemoteMapping } from "./remoteUris";
 import { parseDiffTab, parseWebviewTab, webviewTabPath } from "../lib/virtualTabs";
 import { track } from "../state/activity";
 import { ask, notify } from "../state/notifications";
@@ -50,8 +52,8 @@ let runningFor: string | null = null;
 function wantedFor(): { key: string | null; extensions: InstalledExtension[]; root: string | null } {
   const root = useWorkspace.getState().root;
   const extensions = useExtensions.getState().installed.filter(hasCode);
-  // Extensions run locally; an SSH workspace has no local files for them to read.
-  if (extensions.length === 0 || remoteOf(root)?.kind === "ssh") return { key: null, extensions, root };
+  // In SSH and WSL workspaces the host runs on the remote (see `start`).
+  if (extensions.length === 0) return { key: null, extensions, root };
   const key = JSON.stringify([root, extensions.map((e) => `${e.id}@${e.manifest.version}`)]);
   return { key, extensions, root };
 }
@@ -126,25 +128,54 @@ async function start(key: string, extensions: InstalledExtension[], root: string
   forgetHostState();
   runningFor = key;
   useExtensionHost.setState({ status: "starting" });
-  log("info", `Starting the extension host with ${extensions.map((e) => e.id).join(", ")}`);
+  const remote = remoteOf(root);
+  const where = remote ? ` on ${remoteLabel(remote)}` : "";
+  log("info", `Starting the extension host${where} with ${extensions.map((e) => e.id).join(", ")}`);
   try {
-    await track("Starting extensions…", async () => {
-      await rpc.startProcess(onUnexpectedExit);
-      const data = await appDataDir();
+    await track(`Starting extensions${where}…`, async () => {
       const storageKey = root ? hashKey(root) : "empty";
+      // Where the host runs decides the paths it gets: local folders, or the remote's.
+      let location: { extensionPath: (e: InstalledExtension) => string; globalStorage: string; storage: string; logs: string };
+      let launch: rpc.RemoteLaunch | undefined;
+      let mapping: RemoteMapping | undefined;
+      if (remote) {
+        mapping = remote.kind === "ssh" ? { kind: "ssh", host: remote.host } : { kind: "wsl", distro: remote.distro };
+        const prepared = await prepareRemote(mapping, extensions);
+        launch = { target: mapping, node: prepared.node, script: prepared.script };
+        const skipped = new Set(prepared.skipped.map((s) => s.split(/[: ]/)[0]));
+        extensions = extensions.filter((e) => !skipped.has(e.id));
+        location = {
+          extensionPath: (e) => `${prepared.extensionsDir}/${e.id}`,
+          globalStorage: `${prepared.dataDir}/global`,
+          storage: `${prepared.dataDir}/workspaces/${storageKey}`,
+          logs: `${prepared.dataDir}/logs`,
+        };
+      } else {
+        const data = await appDataDir();
+        location = {
+          extensionPath: (e) => e.path,
+          globalStorage: await join(data, "exthost", "global"),
+          storage: await join(data, "exthost", "workspaces", storageKey),
+          logs: await join(data, "exthost", "logs"),
+        };
+      }
+      await rpc.startProcess(onUnexpectedExit, launch, mapping && createTranslator(mapping));
       await loadUserSettings();
       const settings = useUserSettings.getState().values;
       lastSettings = JSON.stringify(settings);
       const result = await rpc.request<{ commands: ContributedCommand[]; defaults: Record<string, unknown> }>("initialize", {
-        workspaceFolders: root ? [{ uri: monaco.Uri.file(root).toString(), name: basename(root) }] : [],
-        extensions: extensions.map((e) => ({ id: e.id, path: e.path, manifest: e.manifest })),
+        workspaceFolders: root ? [{ uri: fileUri(root).toString(), name: basename(root) }] : [],
+        extensions: extensions.map((e) => ({ id: e.id, path: location.extensionPath(e), manifest: e.manifest })),
         settings,
         languages: monaco.languages.getLanguages().map((l) => l.id),
-        globalStoragePath: await join(data, "exthost", "global"),
-        storagePath: await join(data, "exthost", "workspaces", storageKey),
-        logPath: await join(data, "exthost", "logs"),
+        globalStoragePath: location.globalStorage,
+        storagePath: location.storage,
+        logPath: location.logs,
         webviewOrigin: WEBVIEW_ORIGIN,
         colorThemeKind: activeThemeKind(),
+        remote: mapping ?? null,
+        // A remote host maps its extensions' media (webviews, icons) to these local copies.
+        localExtensionPaths: Object.fromEntries(extensions.map((e) => [e.id, e.path])),
       });
       setConfigurationContext(settings, result.defaults);
       useExtensionHost.setState({ commands: result.commands, status: "running" });
@@ -158,6 +189,41 @@ async function start(key: string, extensions: InstalledExtension[], root: string
     useExtensionHost.setState({ status: "crashed" });
     log("error", `Could not start the extension host: ${errorMessage(e)}`);
     notify("error", "Extensions could not start", errorMessage(e));
+  }
+}
+
+interface PreparedRemote {
+  node: string;
+  script: string;
+  home: string;
+  extensionsDir: string;
+  dataDir: string;
+  skipped: string[];
+}
+
+/** Installs Node.js, the host and the extensions on the remote as needed; shows each step. */
+async function prepareRemote(target: RemoteMapping, extensions: InstalledExtension[]): Promise<PreparedRemote> {
+  const steps = new Channel<string>();
+  // Each step shows in the status bar until the next one starts.
+  const step: { finish?: () => void } = {};
+  steps.onmessage = (text) => {
+    step.finish?.();
+    log("info", text);
+    void track(text, () => new Promise<void>((resolve) => (step.finish = resolve)));
+  };
+  try {
+    const prepared = await invoke<PreparedRemote>("remote_exthost_prepare", {
+      target,
+      extensions: extensions.map((e) => ({ id: e.id, path: e.path, publisher: e.manifest.publisher, name: e.manifest.name, version: e.manifest.version })),
+      onProgress: steps,
+    });
+    for (const reason of prepared.skipped) log("warning", `Not available on the remote: ${reason}`);
+    if (prepared.skipped.length > 0) {
+      notify("info", "Some extensions do not run on this remote", prepared.skipped.join("\n"));
+    }
+    return prepared;
+  } finally {
+    step.finish?.();
   }
 }
 
@@ -420,7 +486,8 @@ function forgetPanel(id: string) {
   disposeWebview(id);
 }
 
-function iconUrl(icon: { uri: string } | { themeIcon: string } | undefined): string | undefined {
+function iconUrl(icon: { uri: string } | { localPath: string } | { themeIcon: string } | undefined): string | undefined {
+  if (icon && "localPath" in icon) return convertFileSrc(icon.localPath);
   if (!icon || !("uri" in icon)) return undefined;
   return icon.uri.startsWith("file:") ? convertFileSrc(pathFromUri(icon.uri)) : icon.uri;
 }
@@ -617,7 +684,7 @@ function reveal(path: string, range?: RangeDto) {
 }
 
 function detectLanguage(path: string): string {
-  const model = monaco.editor.getModel(monaco.Uri.file(path));
+  const model = monaco.editor.getModel(fileUri(path));
   if (model) return model.getLanguageId();
   const name = basename(path).toLowerCase();
   const language = monaco.languages

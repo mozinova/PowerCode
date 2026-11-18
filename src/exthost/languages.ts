@@ -3,7 +3,7 @@
 
 import { monaco } from "../editor/monaco";
 import { loadModel } from "../editor/models";
-import { IS_WINDOWS } from "../lib/platform";
+import { uriToPath } from "../editor/uris";
 import * as rpc from "./rpc";
 
 type L = typeof monaco.languages;
@@ -22,10 +22,9 @@ const fromRange = (r: monaco.IRange): RangeDto => ({
 });
 const markdown = (value?: string) => (value ? { value, supportThemeIcons: true } : undefined);
 
-/** The file path of a `file:` URI, with Windows drive letters upper-cased like the app's paths. */
+/** The workspace path of a file URI (local, WSL or SSH). */
 export function pathFromUri(uri: string): string {
-  const fsPath = monaco.Uri.parse(uri).fsPath;
-  return IS_WINDOWS ? fsPath.replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`) : fsPath;
+  return uriToPath(uri);
 }
 
 // `vscode.CompletionItemKind` names, by their values in the extension API.

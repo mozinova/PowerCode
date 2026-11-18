@@ -41,7 +41,32 @@ pub struct Program {
     env: HashMap<String, Option<String>>,
 }
 
+/// `cd <dir> && exec env -u A B=1 <command> <args>`: the program as a shell line on a remote.
+fn remote_program_line(dir: &str, program: &Program) -> String {
+    use crate::remote::quote;
+    let mut env = Vec::new();
+    for (key, value) in &program.env {
+        match value {
+            Some(value) => env.push(quote(&format!("{key}={value}"))),
+            None => env.push(format!("-u {}", quote(key))),
+        }
+    }
+    let command: Vec<String> = std::iter::once(&program.command).chain(&program.args).map(|a| quote(a)).collect();
+    format!("cd {} && exec env {} {}", quote(dir), env.join(" "), command.join(" "))
+}
+
 fn program_command(cwd: Option<&str>, program: &Program) -> CommandBuilder {
+    // In remote workspaces the program runs on the remote (e.g. a debugger's `runInTerminal`).
+    if let Some((host, dir)) = cwd.and_then(crate::remote::parse) {
+        let mut cmd = CommandBuilder::new("ssh");
+        cmd.args(["-t", host, &remote_program_line(&dir, program)]);
+        return cmd;
+    }
+    if let Some((distro, dir)) = cwd.and_then(crate::wsl::parse_share) {
+        let mut cmd = CommandBuilder::new("wsl.exe");
+        cmd.args(["-d", &distro, "--exec", "sh", "-c", &remote_program_line(&dir, program)]);
+        return cmd;
+    }
     let mut cmd = CommandBuilder::new(&program.command);
     cmd.args(&program.args);
     if let Some(dir) = cwd {
@@ -208,4 +233,22 @@ pub fn terminal_kill(state: State<'_, Terminals>, id: u32) -> CmdResult<()> {
         let _ = session.killer.kill();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_programs_run_as_quoted_shell_lines() {
+        let program = Program {
+            command: "python3".into(),
+            args: vec!["-m".into(), "debugpy".into(), "it's.py".into()],
+            env: HashMap::from([("PYTHONUNBUFFERED".to_string(), Some("1".to_string()))]),
+        };
+        assert_eq!(
+            remote_program_line("/home/me/my app", &program),
+            r"cd '/home/me/my app' && exec env 'PYTHONUNBUFFERED=1' 'python3' '-m' 'debugpy' 'it'\''s.py'"
+        );
+    }
 }

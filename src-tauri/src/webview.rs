@@ -97,6 +97,24 @@ pub fn handle<R: Runtime>(ctx: UriSchemeContext<'_, R>, request: Request<Vec<u8>
     let path = percent_decode(request.uri().path());
     let path = path.strip_prefix('/').unwrap_or(&path).to_string();
 
+    // `/ssh/<host>/<absolute path>`: a file on an SSH host (e.g. an image in a Markdown preview).
+    if let Some(rest) = path.strip_prefix("ssh/") {
+        let Some((host, remote_path)) = rest.split_once('/') else {
+            responder.respond(response(StatusCode::NOT_FOUND, "text/plain", b"Not found".to_vec()));
+            return;
+        };
+        let (host, remote_path) = (host.to_string(), format!("/{remote_path}"));
+        tauri::async_runtime::spawn_blocking(move || {
+            let script = format!("cat -- {}", crate::remote::quote(&remote_path));
+            let reply = match crate::remote::shared().exec_blocking(&host, &script) {
+                Ok(bytes) => response(StatusCode::OK, mime_type(&remote_path), bytes),
+                Err(_) => response(StatusCode::NOT_FOUND, "text/plain", b"Not found".to_vec()),
+            };
+            responder.respond(reply);
+        });
+        return;
+    }
+
     if let Some(rest) = path.strip_prefix("file/") {
         let file = file_path(rest);
         tauri::async_runtime::spawn_blocking(move || {

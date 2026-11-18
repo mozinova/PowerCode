@@ -77,6 +77,9 @@ export function TreeNodeIcon({ node, expanded }: { node: TreeNode; expanded: boo
     }
     return <Codicon name={icon.themeIcon} color={themeColor(icon.color)} />;
   }
+  if (icon && "localPath" in icon) {
+    return <img src={convertFileSrc(icon.localPath)} alt="" width={16} height={16} draggable={false} className="size-4 shrink-0 object-contain" />;
+  }
   if (icon && "uri" in icon) {
     const url = icon.uri.startsWith("file:") ? convertFileSrc(pathFromUri(icon.uri)) : icon.uri;
     return <img src={url} alt="" width={16} height={16} draggable={false} className="size-4 shrink-0 object-contain" />;

@@ -2,6 +2,7 @@
 //! Messages travel through the Rust process as JSON lines.
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { UNTRANSLATED_METHODS, type Translator } from "./remoteUris";
 
 type Handler = (params: any) => unknown | Promise<unknown>;
 
@@ -27,7 +28,18 @@ let current: Channel<string> | null = null;
  */
 let sending: Promise<unknown> = Promise.resolve();
 
-function send(message: Message) {
+/** Paths and URIs translation while the host runs on a remote (see remoteUris.ts). */
+let translator: Translator | null = null;
+/** Methods of our pending requests, so their results are translated (or not) like them. */
+const pendingMethods = new Map<number, string>();
+
+const translated = (method: string | undefined) => translator !== null && !(method && UNTRANSLATED_METHODS.has(method));
+
+function send(message: Message, method = message.method) {
+  if (translated(method)) {
+    if (message.params !== undefined) message = { ...message, params: translator!.toHost(message.params) };
+    if (message.result !== undefined) message = { ...message, result: translator!.toHost(message.result) };
+  }
   const line = JSON.stringify(message);
   sending = sending.then(() => invoke("exthost_send", { message: line }).catch(() => {}));
 }
@@ -49,6 +61,7 @@ export function request<T = unknown>(method: string, params?: unknown): Promise<
   const id = nextId++;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });
+    pendingMethods.set(id, method);
     send({ id, method, params });
   });
 }
@@ -58,18 +71,22 @@ async function dispatch(message: Message) {
     const waiting = message.id !== undefined ? pending.get(message.id) : undefined;
     if (!waiting) return;
     pending.delete(message.id!);
+    const method = pendingMethods.get(message.id!);
+    pendingMethods.delete(message.id!);
     if (message.error) waiting.reject(new Error(message.error.message));
-    else waiting.resolve(message.result);
+    else waiting.resolve(translated(method) ? translator!.fromHost(message.result) : message.result);
     return;
   }
+  const method = message.method;
+  const params = translated(method) ? translator!.fromHost(message.params) : message.params;
   if (message.id === undefined) {
-    await notificationHandlers.get(message.method)?.(message.params);
+    await notificationHandlers.get(method)?.(params);
     return;
   }
-  const handler = requestHandlers.get(message.method);
+  const handler = requestHandlers.get(method);
   try {
-    if (!handler) throw new Error(`PowerCode does not handle ${message.method}`);
-    send({ id: message.id, result: (await handler(message.params)) ?? null });
+    if (!handler) throw new Error(`PowerCode does not handle ${method}`);
+    send({ id: message.id, result: (await handler(params)) ?? null }, method);
   } catch (e) {
     send({ id: message.id, error: { message: e instanceof Error ? e.message : String(e) } });
   }
@@ -78,13 +95,23 @@ async function dispatch(message: Message) {
 function rejectPending(reason: string) {
   for (const waiting of pending.values()) waiting.reject(new Error(reason));
   pending = new Map();
+  pendingMethods.clear();
+}
+
+/** Where the host runs: locally, or on a remote prepared by `remote_exthost_prepare`. */
+export interface RemoteLaunch {
+  target: { kind: "ssh"; host: string } | { kind: "wsl"; distro: string };
+  node: string;
+  script: string;
 }
 
 /**
  * Starts the host process (stopping a previous one); `onExit` runs if it
  * stops on its own, i.e. not through `startProcess` or `stopProcess`.
+ * A remote host gets its messages' paths and URIs translated by `remoteTranslator`.
  */
-export async function startProcess(onExit: () => void) {
+export async function startProcess(onExit: () => void, remote?: RemoteLaunch, remoteTranslator?: Translator) {
+  translator = remote ? (remoteTranslator ?? null) : null;
   // Requests to a previous host will never be answered.
   rejectPending("The extension host restarted.");
   const channel = new Channel<string>();
@@ -107,7 +134,7 @@ export async function startProcess(onExit: () => void) {
     void dispatch(message).catch((e) => console.error("Extension host message failed", e));
   };
   try {
-    await invoke("exthost_start", { onMessage: channel });
+    await invoke("exthost_start", { remote: remote ?? null, onMessage: channel });
   } catch (e) {
     if (current === channel) current = null;
     throw e;

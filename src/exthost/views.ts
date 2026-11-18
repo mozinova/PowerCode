@@ -16,7 +16,7 @@ export interface TreeNode {
   label: string;
   description?: string;
   tooltip?: string;
-  icon?: { themeIcon: string; color?: string } | { uri: string };
+  icon?: { themeIcon: string; color?: string } | { uri: string } | { localPath: string };
   resourceUri?: string;
   /** 0 none, 1 collapsed, 2 expanded (`TreeItemCollapsibleState`). */
   collapsible: number;

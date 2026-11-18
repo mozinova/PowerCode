@@ -41,6 +41,14 @@ fn node_binary() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
+/// Where to run the extension host instead of locally.
+#[derive(serde::Deserialize)]
+pub struct RemoteLaunch {
+    target: crate::remote_exthost::RemoteTarget,
+    node: String,
+    script: String,
+}
+
 /// Windows paths without the `\\?\` (extended-length) prefix Tauri's path resolver adds:
 /// Node cannot resolve its main module from such a path.
 fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
@@ -57,7 +65,7 @@ fn without_verbatim_prefix(path: PathBuf) -> PathBuf {
 /// The bundled host script. Development builds read it from the source tree, so
 /// `bun run build:exthost` plus "Restart Extension Host" applies host changes
 /// without rebuilding the app (resources are only copied by the Rust build).
-fn host_script(app: &AppHandle) -> CmdResult<PathBuf> {
+pub(crate) fn host_script(app: &AppHandle) -> CmdResult<PathBuf> {
     #[cfg(debug_assertions)]
     {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources").join("ext-host.cjs");
@@ -79,12 +87,23 @@ fn log_line(level: &str, message: &str) -> String {
 
 /// Starts (or restarts) the host; its messages arrive on `on_message` as JSON strings.
 #[tauri::command(async)]
-pub fn exthost_start(app: AppHandle, state: State<'_, ExtensionHost>, on_message: Channel<String>) -> CmdResult<()> {
+pub fn exthost_start(
+    app: AppHandle,
+    state: State<'_, ExtensionHost>,
+    remote: Option<RemoteLaunch>,
+    on_message: Channel<String>,
+) -> CmdResult<()> {
     state.stop();
-    let script = host_script(&app)?;
-    let mut command = Command::new(node_binary());
+    // Locally with the bundled Node, or on the remote prepared by `remote_exthost_prepare`.
+    let mut command = match &remote {
+        Some(launch) => crate::remote_exthost::host_command(&launch.target, &launch.node, &launch.script),
+        None => {
+            let mut command = Command::new(node_binary());
+            command.arg(host_script(&app)?);
+            command
+        }
+    };
     command
-        .arg(&script)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -95,7 +114,7 @@ pub fn exthost_start(app: AppHandle, state: State<'_, ExtensionHost>, on_message
     }
     let mut child = command
         .spawn()
-        .map_err(|e| format!("Could not start the extension host ({}): {e}", node_binary().display()))?;
+        .map_err(|e| format!("Could not start the extension host: {e}"))?;
     let stdin = child.stdin.take().ok_or("No stdin")?;
     let stdout = child.stdout.take().ok_or("No stdout")?;
     let stderr = child.stderr.take().ok_or("No stderr")?;

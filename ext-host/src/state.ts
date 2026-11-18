@@ -23,6 +23,10 @@ export const host = {
   logPath: "",
   /** Origin of the UI's webview protocol, for `asWebviewUri` and `cspSource`. */
   webviewOrigin: "",
+  /** Where this host runs when not on the UI's machine (an SSH host or a WSL distribution). */
+  remote: null as { kind: "ssh"; host: string } | { kind: "wsl"; distro: string } | null,
+  /** On a remote: each extension's folder on the UI's machine (same version), for webview and icon files. */
+  localExtensionPaths: {} as Record<string, string>,
   /** `ColorThemeKind` of the editor theme: 1 light, 2 dark, 3 high contrast, 4 high contrast light. */
   colorThemeKind: 2,
 };

@@ -7,6 +7,7 @@ mod fs;
 mod git;
 mod profiles;
 mod remote;
+mod remote_exthost;
 mod search;
 mod system;
 mod terminal;
@@ -85,6 +86,7 @@ pub fn run() {
             extensions::extensions_uninstall,
             extensions::extensions_read_file,
             cli::cli_take_pending,
+            remote_exthost::remote_exthost_prepare,
             system::system_integration_status,
             system::system_install_command,
             system::system_uninstall_command,

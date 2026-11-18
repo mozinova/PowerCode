@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { getModel, saveModel } from "../editor/models";
-import { monaco } from "../editor/monaco";
+import { fileUri } from "../editor/uris";
 import { basename } from "../lib/paths";
 import { customEditorTabPath, parseCustomEditorTab } from "../lib/virtualTabs";
 import { openPaths, useWorkspace } from "../state/workspace";
@@ -69,7 +69,7 @@ export async function resolveCustomEditorTab(tabPath: string) {
   try {
     const result = await rpc.request<{ id: string; kind: "text" | "editable" | "readonly" } | null>("customEditors/resolve", {
       viewType: tab.viewType,
-      uri: monaco.Uri.file(tab.path).toString(),
+      uri: fileUri(tab.path).toString(),
       title: basename(tab.path),
     });
     if (result) useCustomEditors.setState(({ tabs }) => ({ tabs: { ...tabs, [tabPath]: result } }));
@@ -84,7 +84,7 @@ export async function saveCustomEditorTab(tabPath: string) {
   if (!tab) return;
   const kind = useCustomEditors.getState().tabs[tabPath]?.kind;
   if (kind === "editable") {
-    await rpc.request("customEditors/save", { viewType: tab.viewType, uri: monaco.Uri.file(tab.path).toString() });
+    await rpc.request("customEditors/save", { viewType: tab.viewType, uri: fileUri(tab.path).toString() });
   } else if (getModel(tab.path)) {
     await saveModel(tab.path);
   }
