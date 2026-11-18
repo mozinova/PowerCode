@@ -218,15 +218,29 @@ pub struct InstalledExtension {
     id: String,
     path: String,
     manifest: serde_json::Value,
+    /// Turned off by the user: installed, but nothing of it is loaded.
+    disabled: bool,
+}
+
+/// Ids of the extensions the user disabled, kept next to them (survives updates).
+const DISABLED_FILE: &str = ".disabled.json";
+
+fn disabled_ids(root: &Path) -> std::collections::BTreeSet<String> {
+    std::fs::read_to_string(root.join(DISABLED_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
 }
 
 fn read_installed(dir: &Path) -> Option<InstalledExtension> {
     let id = dir.file_name()?.to_string_lossy().into_owned();
     let manifest = std::fs::read_to_string(dir.join("package.json")).ok()?;
+    let disabled = dir.parent().is_some_and(|root| disabled_ids(root).contains(&id));
     Some(InstalledExtension {
         id,
         path: dir.to_string_lossy().into_owned(),
         manifest: serde_json::from_str(&manifest).ok()?,
+        disabled,
     })
 }
 
@@ -240,6 +254,116 @@ pub fn extensions_list(app: AppHandle) -> CmdResult<Vec<InstalledExtension>> {
         .collect();
     installed.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(installed)
+}
+
+fn set_disabled(root: &Path, id: &str, disabled: bool) -> CmdResult<()> {
+    let mut ids = disabled_ids(root);
+    let changed = if disabled { ids.insert(id.to_string()) } else { ids.remove(id) };
+    if changed {
+        std::fs::write(root.join(DISABLED_FILE), serde_json::to_string_pretty(&ids).map_err(err)?).map_err(err)?;
+    }
+    Ok(())
+}
+
+/// Disables (or enables again) an installed extension; it stays on disk.
+#[tauri::command(async)]
+pub fn extensions_set_enabled(app: AppHandle, id: String, enabled: bool) -> CmdResult<()> {
+    validate_segment(&id)?;
+    set_disabled(&extensions_dir(&app)?, &id.to_lowercase(), !enabled)
+}
+
+/// Size in bytes of the package that installing `namespace.name` would download
+/// (this platform's), from the server's headers; None when it does not say.
+#[tauri::command]
+pub async fn extensions_download_size(namespace: String, name: String) -> CmdResult<Option<u64>> {
+    validate_segment(&namespace)?;
+    validate_segment(&name)?;
+    let metadata: ExtensionMetadata = http()
+        .get(format!("{OPEN_VSX_API}/{namespace}/{name}"))
+        .send()
+        .await
+        .map_err(err)?
+        .error_for_status()
+        .map_err(err)?
+        .json()
+        .await
+        .map_err(err)?;
+    let (url, _) = choose_download(&metadata, current_target_platform())?;
+    let response = http().head(url).send().await.map_err(err)?.error_for_status().map_err(err)?;
+    // The header itself: for a HEAD response the body (and so `content_length()`) is empty.
+    Ok(response
+        .headers()
+        .get(reqwest::header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok()))
+}
+
+// ---- Cancelling installs ----------------------------------------------------------
+
+/// The error of a cancelled install; the UI recognises it and stays quiet.
+pub const CANCELLED: &str = "The installation was cancelled.";
+
+#[derive(Default)]
+struct Cancel {
+    cancelled: std::sync::atomic::AtomicBool,
+    notify: tokio::sync::Notify,
+}
+
+impl Cancel {
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Resolves once cancelled (at once if it already was).
+    async fn cancelled(&self) {
+        if !self.is_cancelled() {
+            self.notify.notified().await;
+        }
+    }
+}
+
+/// Installs in flight, by id.
+fn installs() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Cancel>>> {
+    static INSTALLS: OnceLock<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<Cancel>>>> = OnceLock::new();
+    INSTALLS.get_or_init(Default::default)
+}
+
+/// Registers an install; dropping it unregisters.
+struct InstallGuard {
+    id: String,
+    cancel: std::sync::Arc<Cancel>,
+}
+
+impl InstallGuard {
+    fn new(id: &str) -> Self {
+        let cancel = std::sync::Arc::new(Cancel::default());
+        if let Ok(mut map) = installs().lock() {
+            map.insert(id.to_string(), cancel.clone());
+        }
+        Self { id: id.to_string(), cancel }
+    }
+}
+
+impl Drop for InstallGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = installs().lock() {
+            if map.get(&self.id).is_some_and(|c| std::sync::Arc::ptr_eq(c, &self.cancel)) {
+                map.remove(&self.id);
+            }
+        }
+    }
+}
+
+/// Stops the install of `id` (`namespace.name`) while it downloads. False when none is running.
+#[tauri::command]
+pub fn extensions_cancel_install(id: String) -> bool {
+    let Some(cancel) = installs().lock().ok().and_then(|map| map.get(&id.to_lowercase()).cloned()) else {
+        return false;
+    };
+    cancel.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+    // A stored permit wakes the download even if it is not waiting right now.
+    cancel.notify.notify_one();
+    true
 }
 
 #[derive(Deserialize)]
@@ -333,15 +457,13 @@ pub struct DownloadProgress {
 /// Interval between progress events, so a fast download does not flood the UI.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Downloads `url` into the file `to` (not memory: packages can be large), reporting progress.
-async fn download_with_progress(url: &str, to: &Path, on_progress: &Channel<DownloadProgress>) -> CmdResult<()> {
-    let mut response = http()
-        .get(url)
-        .send()
-        .await
-        .map_err(err)?
-        .error_for_status()
-        .map_err(err)?;
+/// Downloads `url` into the file `to` (not memory: packages can be large), reporting
+/// progress; `cancel` stops it at any point, even while the connection stalls.
+async fn download_with_progress(url: &str, to: &Path, on_progress: &Channel<DownloadProgress>, cancel: &Cancel) -> CmdResult<()> {
+    let mut response = tokio::select! {
+        response = http().get(url).send() => response.map_err(err)?.error_for_status().map_err(err)?,
+        _ = cancel.cancelled() => return Err(CANCELLED.into()),
+    };
     let total = response.content_length();
     if total.is_some_and(|t| t > MAX_VSIX_BYTES) {
         return Err("The extension is too large.".into());
@@ -354,7 +476,12 @@ async fn download_with_progress(url: &str, to: &Path, on_progress: &Channel<Down
     let mut file = std::io::BufWriter::new(std::fs::File::create(to).map_err(err)?);
     let mut downloaded: u64 = 0;
     let mut last_report = Instant::now();
-    while let Some(chunk) = response.chunk().await.map_err(err)? {
+    loop {
+        let chunk = tokio::select! {
+            chunk = response.chunk() => chunk.map_err(err)?,
+            _ = cancel.cancelled() => return Err(CANCELLED.into()),
+        };
+        let Some(chunk) = chunk else { break };
         std::io::Write::write_all(&mut file, &chunk).map_err(err)?;
         downloaded += chunk.len() as u64;
         if downloaded > MAX_VSIX_BYTES {
@@ -379,6 +506,9 @@ pub async fn extensions_install(
 ) -> CmdResult<InstalledExtension> {
     validate_segment(&namespace)?;
     validate_segment(&name)?;
+    let id = format!("{namespace}.{name}").to_lowercase();
+    // Until the package is unpacked, `extensions_cancel_install(id)` stops it.
+    let guard = InstallGuard::new(&id);
 
     let metadata: ExtensionMetadata = http()
         .get(format!("{OPEN_VSX_API}/{namespace}/{name}"))
@@ -393,16 +523,21 @@ pub async fn extensions_install(
     let (url, platform) = choose_download(&metadata, current_target_platform())?;
 
     let root = extensions_dir(&app)?;
-    let id = format!("{namespace}.{name}").to_lowercase();
     let staging = root.join(format!(".staging-{id}"));
     let dest = root.join(&id);
     // Next to the extensions (same disk), removed whatever happens.
     let package = root.join(format!(".download-{id}.vsix"));
-    let downloaded = download_with_progress(&url, &package, &on_progress).await;
+    let downloaded = download_with_progress(&url, &package, &on_progress, &guard.cancel).await;
     if let Err(e) = downloaded {
         let _ = std::fs::remove_file(&package);
         return Err(e);
     }
+    // Cancelled right as the download ended: nothing is replaced.
+    if guard.cancel.is_cancelled() {
+        let _ = std::fs::remove_file(&package);
+        return Err(CANCELLED.into());
+    }
+    drop(guard);
 
     tauri::async_runtime::spawn_blocking(move || {
         let _ = std::fs::remove_dir_all(&staging);
@@ -488,7 +623,10 @@ pub async fn extensions_install_vsix(app: AppHandle, path: String) -> CmdResult<
 #[tauri::command(async)]
 pub fn extensions_uninstall(app: AppHandle, id: String) -> CmdResult<()> {
     validate_segment(&id)?;
-    std::fs::remove_dir_all(extensions_dir(&app)?.join(id)).map_err(err)
+    let root = extensions_dir(&app)?;
+    std::fs::remove_dir_all(root.join(&id)).map_err(err)?;
+    // Installed again later, it starts enabled.
+    set_disabled(&root, &id.to_lowercase(), false)
 }
 
 /// Reads a file contributed by an installed extension (grammar, theme, ...).
@@ -600,6 +738,40 @@ mod tests {
             "downloads": { "universal": "https://x/u.vsix" }
         }));
         assert_eq!(choose_download(&listed, "linux-x64").unwrap().1, "universal");
+    }
+
+    #[test]
+    fn disabled_extensions_are_remembered() {
+        let root = std::env::temp_dir().join(format!("powercode-disabled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("me.tool");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), r#"{"name":"tool"}"#).unwrap();
+        assert!(!read_installed(&dir).unwrap().disabled);
+        set_disabled(&root, "me.tool", true).unwrap();
+        set_disabled(&root, "me.tool", true).unwrap();
+        assert!(read_installed(&dir).unwrap().disabled);
+        assert_eq!(disabled_ids(&root).len(), 1);
+        set_disabled(&root, "me.tool", false).unwrap();
+        assert!(!read_installed(&dir).unwrap().disabled);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn cancelling_stops_a_waiting_download() {
+        tauri::async_runtime::block_on(async {
+            let guard = InstallGuard::new("me.slow");
+            // Cancelled before anyone waits: the stored flag still ends the wait.
+            assert!(extensions_cancel_install("Me.Slow".into()));
+            let stalled = std::future::pending::<()>();
+            let result = tokio::select! {
+                _ = stalled => "finished",
+                _ = guard.cancel.cancelled() => "cancelled",
+            };
+            assert_eq!(result, "cancelled");
+            drop(guard);
+            assert!(!extensions_cancel_install("me.slow".into()), "unregistered once done");
+        });
     }
 
     #[test]

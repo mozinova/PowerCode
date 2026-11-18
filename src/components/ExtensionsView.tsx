@@ -1,5 +1,5 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { BadgeCheck, Blocks, Download, Loader2, Minus, RefreshCw, Search, Trash2, Upload } from "lucide-react";
+import { BadgeCheck, Blocks, Download, Loader2, Minus, PowerOff, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { setIconTheme, useIconThemes } from "../extensions/iconThemes";
 import { openExtensionPage, pickAndInstallVsix } from "../actions";
@@ -8,6 +8,7 @@ import {
   installExtension,
   installedIconUrl,
   setEditorTheme,
+  setExtensionEnabled,
   uninstallExtension,
   useExtensions,
 } from "../extensions/runtime";
@@ -120,10 +121,21 @@ function ThemePickers() {
 
 function InstalledRow({ ext }: { ext: InstalledExtension }) {
   const [busy, setBusy] = useState(false);
+  const [toggling, setToggling] = useState(false);
   const { manifest } = ext;
   const icon = installedIconUrl(ext);
   const update = useExtensions((s) => s.updates[ext.id]);
   const progress = useInstallProgress(manifest.publisher, manifest.name);
+  const toggle = async () => {
+    setToggling(true);
+    try {
+      await setExtensionEnabled(ext.id, ext.disabled);
+    } catch (err) {
+      await reportError(`Could not ${ext.disabled ? "enable" : "disable"} the extension`, err);
+    } finally {
+      setToggling(false);
+    }
+  };
   return (
     <div
       onClick={() =>
@@ -131,15 +143,45 @@ function InstalledRow({ ext }: { ext: InstalledExtension }) {
       }
       className="group flex cursor-default items-start gap-2.5 px-3 py-2 hover:bg-hover/50"
     >
-      <ExtensionIcon src={icon} />
+      <div className={ext.disabled ? "opacity-50 grayscale" : ""}>
+        <ExtensionIcon src={icon} />
+      </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-2">
-          <span className="truncate font-medium">{manifest.displayName ?? manifest.name}</span>
+          <span className={`truncate font-medium ${ext.disabled ? "text-fg-muted" : ""}`}>{manifest.displayName ?? manifest.name}</span>
           <span className="shrink-0 text-xs text-fg-subtle">{manifest.version}</span>
         </div>
-        <div className="truncate text-xs text-fg-muted">{summarize(ext)}</div>
-        {progress && <InstallProgressBar progress={progress} className="mt-1.5" />}
+        <div className="truncate text-xs text-fg-muted">{ext.disabled ? "Disabled" : summarize(ext)}</div>
+        {progress && <InstallProgressBar progress={progress} namespace={manifest.publisher} name={manifest.name} className="mt-1.5" />}
       </div>
+      {ext.disabled ? (
+        <button
+          type="button"
+          disabled={toggling}
+          onClick={(e) => {
+            e.stopPropagation();
+            void toggle();
+          }}
+          className="flex h-7 shrink-0 items-center gap-1 rounded-md border border-input-border px-2.5 text-xs hover:bg-hover disabled:opacity-70"
+        >
+          {toggling && <Loader2 size={12} className="animate-spin" />}
+          Enable
+        </button>
+      ) : (
+        <button
+          type="button"
+          {...tooltipProps("Disable")}
+          aria-label={`Disable ${manifest.displayName ?? manifest.name}`}
+          disabled={toggling}
+          onClick={(e) => {
+            e.stopPropagation();
+            void toggle();
+          }}
+          className="invisible flex size-7 shrink-0 items-center justify-center rounded-md text-fg-muted group-hover:visible hover:bg-hover hover:text-fg focus-visible:visible"
+        >
+          {toggling ? <Loader2 size={14} className="animate-spin" /> : <PowerOff size={14} />}
+        </button>
+      )}
       {update && !progress && (
         <button
           type="button"
@@ -182,7 +224,7 @@ function InstalledRow({ ext }: { ext: InstalledExtension }) {
 
 function MarketplaceRow({ entry }: { entry: OpenVsxEntry }) {
   const id = `${entry.namespace}.${entry.name}`.toLowerCase();
-  const installed = useExtensions((s) => s.installed.some((e) => e.id === id));
+  const installed = useExtensions((s) => s.installed.some((e) => e.id === id) || s.disabled.some((e) => e.id === id));
   const progress = useInstallProgress(entry.namespace, entry.name);
   const busy = progress !== undefined;
   return (
@@ -208,7 +250,7 @@ function MarketplaceRow({ entry }: { entry: OpenVsxEntry }) {
             </span>
           )}
         </div>
-        {progress && <InstallProgressBar progress={progress} className="mt-1.5" />}
+        {progress && <InstallProgressBar progress={progress} namespace={entry.namespace} name={entry.name} className="mt-1.5" />}
       </div>
       <button
         type="button"
@@ -271,6 +313,7 @@ function SectionTitle({ children }: { children: string }) {
 export function ExtensionsView() {
   const [query, setQuery] = useState("");
   const installed = useExtensions((s) => s.installed);
+  const disabled = useExtensions((s) => s.disabled);
   const toggleTool = useWorkspace((s) => s.toggleTool);
   const { results, loading, error } = useOpenVsxSearch(query);
 
@@ -311,6 +354,14 @@ export function ExtensionsView() {
           <>
             <SectionTitle>Installed</SectionTitle>
             {installed.map((ext) => (
+              <InstalledRow key={ext.id} ext={ext} />
+            ))}
+          </>
+        )}
+        {disabled.length > 0 && (
+          <>
+            <SectionTitle>Disabled</SectionTitle>
+            {disabled.map((ext) => (
               <InstalledRow key={ext.id} ext={ext} />
             ))}
           </>

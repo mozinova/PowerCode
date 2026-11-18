@@ -9,7 +9,7 @@ import { attachGrammar, registerGrammar } from "../editor/textmate";
 import { POWERCODE_DARK, applyEditorTheme, type EditorTheme } from "../editor/themes";
 import { joinPath } from "../lib/paths";
 import { track } from "../state/activity";
-import { errorMessage, extensionsApi, type DownloadProgress, type InstalledExtension } from "../lib/ipc";
+import { errorMessage, extensionsApi, INSTALL_CANCELLED, type DownloadProgress, type InstalledExtension } from "../lib/ipc";
 import { notify } from "../state/notifications";
 import { useSettings } from "../state/settings";
 import {
@@ -41,7 +41,10 @@ const BUILTIN_THEME: ThemeOption = {
 export type InstallProgress = DownloadProgress;
 
 interface ExtensionsState {
+  /** Installed and enabled: what the editor, the extension host and the views use. */
   installed: InstalledExtension[];
+  /** Installed but disabled by the user: nothing of them is loaded. */
+  disabled: InstalledExtension[];
   themes: ThemeOption[];
   activeThemeId: string;
   /** Installs in flight, by lower-case `namespace.name`. */
@@ -54,6 +57,7 @@ interface ExtensionsState {
 
 export const useExtensions = create<ExtensionsState>(() => ({
   installed: [],
+  disabled: [],
   themes: [BUILTIN_THEME],
   activeThemeId: BUILTIN_THEME.id,
   installing: {},
@@ -304,15 +308,17 @@ export function initExtensions() {
 }
 
 async function loadExtensions() {
-  let installed: InstalledExtension[] = [];
+  let all: InstalledExtension[] = [];
   try {
-    installed = await extensionsApi.list();
+    all = await extensionsApi.list();
   } catch (e) {
     console.error("Failed to list extensions", e);
   }
+  const installed = all.filter((ext) => !ext.disabled);
   for (const ext of installed) {
     await activate(ext).catch((e) => console.error(`Failed to activate ${ext.id}`, e));
   }
+  useExtensions.setState({ disabled: all.filter((ext) => ext.disabled) });
   setInstalled(installed);
   await setEditorTheme(storedThemeId()).catch(() => setEditorTheme(BUILTIN_THEME.id));
   await setIconTheme(storedIconThemeId()).catch(() => setIconTheme(BUILTIN_ICON_THEME_ID));
@@ -327,7 +333,8 @@ function setInstalling(id: string, progress: InstallProgress | null) {
   });
 }
 
-export async function installExtension(namespace: string, name: string) {
+/** Installs (or updates) from Open VSX; null when the user cancelled the download. */
+export async function installExtension(namespace: string, name: string): Promise<InstalledExtension | null> {
   const key = `${namespace}.${name}`.toLowerCase();
   setInstalling(key, { downloaded: 0, total: null });
   let ext: InstalledExtension;
@@ -335,11 +342,19 @@ export async function installExtension(namespace: string, name: string) {
     ext = await track(`Installing ${name}…`, () =>
       extensionsApi.install(namespace, name, (progress) => setInstalling(key, progress)),
     );
+  } catch (e) {
+    if (errorMessage(e) === INSTALL_CANCELLED) return null;
+    throw e;
   } finally {
     setInstalling(key, null);
   }
   await finishInstall(ext);
   return ext;
+}
+
+/** Stops the download of an install in flight; what was installed before stays. */
+export function cancelInstall(namespace: string, name: string) {
+  return extensionsApi.cancelInstall(`${namespace}.${name}`.toLowerCase());
 }
 
 /**
@@ -364,16 +379,52 @@ export async function installVsixFiles(paths: string[]): Promise<InstalledExtens
 
 /** Applies a just-installed (or reinstalled) extension: contributions, the list, themes. */
 async function finishInstall(ext: InstalledExtension) {
-  deactivate(ext.id);
-  await activate(ext);
-  const others = useExtensions.getState().installed.filter((e) => e.id !== ext.id);
-  setInstalled([...others, ext].sort((a, b) => a.id.localeCompare(b.id)));
+  // An update of a disabled extension stays disabled.
+  if (ext.disabled) {
+    useExtensions.setState(({ disabled }) => ({ disabled: sortById([...disabled.filter((e) => e.id !== ext.id), ext]) }));
+  } else {
+    deactivate(ext.id);
+    await activate(ext);
+    const others = useExtensions.getState().installed.filter((e) => e.id !== ext.id);
+    setInstalled(sortById([...others, ext]));
+  }
   useExtensions.setState(({ updates, wrongPlatform }) => {
     const { [ext.id]: _installed, ...rest } = updates;
     const { [ext.id]: _fixed, ...otherPlatforms } = wrongPlatform;
     return { updates: rest, wrongPlatform: otherPlatforms };
   });
   await reapplyThemesFrom(ext.id);
+}
+
+const sortById = (list: InstalledExtension[]) => [...list].sort((a, b) => a.id.localeCompare(b.id));
+
+/**
+ * Turns an installed extension off or on. Off, nothing of it is loaded: its
+ * grammars, snippets, themes and icon themes go, and the extension host restarts
+ * without it. (Languages it registered stay known to the editor until a restart.)
+ */
+export async function setExtensionEnabled(id: string, enabled: boolean) {
+  const { installed, disabled, themes, activeThemeId } = useExtensions.getState();
+  if (enabled) {
+    const ext = disabled.find((e) => e.id === id);
+    if (!ext) return;
+    await extensionsApi.setEnabled(id, true);
+    const turnedOn = { ...ext, disabled: false };
+    useExtensions.setState({ disabled: disabled.filter((e) => e.id !== id) });
+    await activate(turnedOn);
+    setInstalled(sortById([...useExtensions.getState().installed, turnedOn]));
+    return;
+  }
+  const ext = installed.find((e) => e.id === id);
+  if (!ext) return;
+  await extensionsApi.setEnabled(id, false);
+  deactivate(id);
+  const usedActiveTheme = themes.some((t) => t.id === activeThemeId && t.extensionId === id);
+  // Before its options are dropped, while its active icon theme is still recognisable.
+  await resetIconThemeIfFrom(id);
+  useExtensions.setState({ disabled: sortById([...disabled, { ...ext, disabled: true }]) });
+  setInstalled(installed.filter((e) => e.id !== id));
+  if (usedActiveTheme) await setEditorTheme(BUILTIN_THEME.id);
 }
 
 /** After an update, themes from the extension are reloaded so their new colours show. */
@@ -413,7 +464,8 @@ const openVsxId = (ext: InstalledExtension) => `${ext.manifest.publisher}.${ext.
  * installs them. Returns the ids that have (or had) an update.
  */
 export async function checkForUpdates(install: boolean): Promise<string[]> {
-  const installed = useExtensions.getState().installed;
+  // Disabled extensions are kept up to date too, ready for when they are enabled.
+  const installed = [...useExtensions.getState().installed, ...useExtensions.getState().disabled];
   if (installed.length === 0) return [];
   const latest = await track("Checking for extension updates…", () =>
     extensionsApi.latestVersions(installed.map(openVsxId)),
@@ -431,8 +483,7 @@ export async function checkForUpdates(install: boolean): Promise<string[]> {
     const updated: string[] = [];
     for (const ext of outdated) {
       try {
-        await installExtension(ext.manifest.publisher, ext.manifest.name);
-        updated.push(ext.manifest.displayName ?? ext.manifest.name);
+        if (await installExtension(ext.manifest.publisher, ext.manifest.name)) updated.push(ext.manifest.displayName ?? ext.manifest.name);
       } catch (e) {
         notify("error", `Could not update ${ext.manifest.displayName ?? ext.manifest.name}`, errorMessage(e));
       }
@@ -462,6 +513,7 @@ export async function uninstallExtension(id: string) {
   const removedActiveTheme = themes.some((t) => t.id === activeThemeId && t.extensionId === id);
   // Before the extension's options are dropped, while its active theme is still recognisable.
   await resetIconThemeIfFrom(id);
+  useExtensions.setState(({ disabled }) => ({ disabled: disabled.filter((e) => e.id !== id) }));
   setInstalled(installed.filter((e) => e.id !== id));
   if (removedActiveTheme) await setEditorTheme(BUILTIN_THEME.id);
 }

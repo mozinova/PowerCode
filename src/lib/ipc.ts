@@ -86,6 +86,8 @@ export interface InstalledExtension {
   id: string;
   path: string;
   manifest: ExtensionManifest;
+  /** Turned off by the user: installed, but nothing of it is loaded. */
+  disabled: boolean;
 }
 
 export interface ExtensionManifest {
@@ -168,9 +170,17 @@ export const extensionsApi = {
   /** Installs a .vsix file from this computer. */
   installVsix: (path: string) => invoke<InstalledExtension>("extensions_install_vsix", { path }),
   uninstall: (id: string) => invoke<void>("extensions_uninstall", { id }),
+  setEnabled: (id: string, enabled: boolean) => invoke<void>("extensions_set_enabled", { id, enabled }),
+  /** Bytes the install would download (this platform's package), or null when unknown. */
+  downloadSize: (namespace: string, name: string) => invoke<number | null>("extensions_download_size", { namespace, name }),
+  /** Stops an install while it downloads; false when none is running for `id`. */
+  cancelInstall: (id: string) => invoke<boolean>("extensions_cancel_install", { id }),
   readFile: (id: string, relative: string) =>
     invoke<string>("extensions_read_file", { id, relative }),
 };
+
+/** The error of a cancelled extension install (see `extensions_cancel_install`). */
+export const INSTALL_CANCELLED = "The installation was cancelled.";
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

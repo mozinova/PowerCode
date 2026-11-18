@@ -1,10 +1,18 @@
 import { message } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
-import { BadgeCheck, Blocks, Download, ExternalLink, Loader2, RefreshCw, Star } from "lucide-react";
+import { BadgeCheck, Blocks, Download, ExternalLink, Loader2, Power, PowerOff, RefreshCw, Star } from "lucide-react";
 import { marked } from "marked";
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { installExtension, installedIconUrl, isNewerVersion, uninstallExtension, useExtensions } from "../extensions/runtime";
+import {
+  installExtension,
+  installedIconUrl,
+  isNewerVersion,
+  setExtensionEnabled,
+  uninstallExtension,
+  useExtensions,
+} from "../extensions/runtime";
+import { formatBytes } from "../lib/format";
 import {
   errorMessage,
   extensionsApi,
@@ -86,7 +94,7 @@ function LinkButton({ href, children }: { href: string; children: ReactNode }) {
 /** Offers the newer version when Open VSX has one, e.g. "Update to 2.1.0". */
 function UpdateButton({ namespace, name, latest }: { namespace: string; name: string; latest: string }) {
   const id = `${namespace}.${name}`.toLowerCase();
-  const installedVersion = useExtensions((s) => s.installed.find((e) => e.id === id)?.manifest.version);
+  const installedVersion = useExtensions((s) => (s.installed.find((e) => e.id === id) ?? s.disabled.find((e) => e.id === id))?.manifest.version);
   const wrongPlatform = useExtensions((s) => s.wrongPlatform[id] === true);
   const progress = useInstallProgress(namespace, name);
   if (!installedVersion || progress || !(wrongPlatform || isNewerVersion(latest, installedVersion))) return null;
@@ -106,9 +114,62 @@ function UpdateButton({ namespace, name, latest }: { namespace: string; name: st
   );
 }
 
+/** "Disable" for an enabled extension, "Enable" for a disabled one. */
+function EnableButton({ id }: { id: string }) {
+  const disabled = useExtensions((s) => s.disabled.some((e) => e.id === id));
+  const enabled = useExtensions((s) => s.installed.some((e) => e.id === id));
+  const [busy, setBusy] = useState(false);
+  if (!disabled && !enabled) return null;
+  return (
+    <button
+      type="button"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await setExtensionEnabled(id, disabled);
+        } catch (e) {
+          await message(`Could not ${disabled ? "enable" : "disable"} the extension:\n${errorMessage(e)}`, { title: "PowerCode", kind: "error" });
+        } finally {
+          setBusy(false);
+        }
+      }}
+      className={`flex h-8 items-center gap-1.5 rounded-md px-4 font-medium disabled:opacity-70 ${
+        disabled ? "bg-accent text-white hover:bg-accent-hover" : "border border-input-border text-fg hover:bg-hover"
+      }`}
+    >
+      {busy ? <Loader2 size={14} className="animate-spin" /> : disabled ? <Power size={14} /> : <PowerOff size={14} />}
+      {disabled ? "Enable" : "Disable"}
+    </button>
+  );
+}
+
+/** What installing (or updating) would download for this platform, asked once per page. */
+function DownloadSize({ namespace, name, version }: { namespace: string; name: string; version: string }) {
+  const [size, setSize] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setSize(null);
+    extensionsApi.downloadSize(namespace, name).then(
+      (bytes) => !cancelled && setSize(bytes),
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [namespace, name, version]);
+  if (size === null) return null;
+  return (
+    <span className="flex items-center gap-1 text-xs text-fg-subtle">
+      <Download size={12} />
+      {formatBytes(size)}
+    </span>
+  );
+}
+
 function InstallButton({ namespace, name }: { namespace: string; name: string }) {
   const id = `${namespace}.${name}`.toLowerCase();
-  const installed = useExtensions((s) => s.installed.some((e) => e.id === id));
+  const installed = useExtensions((s) => s.installed.some((e) => e.id === id) || s.disabled.some((e) => e.id === id));
   const progress = useInstallProgress(namespace, name);
   const [uninstalling, setUninstalling] = useState(false);
   const busy = uninstalling || progress !== undefined;
@@ -146,14 +207,15 @@ function InstallButton({ namespace, name }: { namespace: string; name: string })
         {busy && <Loader2 size={14} className="animate-spin" />}
         {busy ? (installed ? "Uninstalling…" : "Installing…") : installed ? "Uninstall" : "Install"}
       </button>
-      {progress && <InstallProgressBar progress={progress} className="w-56" />}
+      {progress && <InstallProgressBar progress={progress} namespace={namespace} name={name} className="w-56" />}
     </>
   );
 }
 
 export function ExtensionPage({ namespace, name }: { namespace: string; name: string }) {
   const id = `${namespace}.${name}`.toLowerCase();
-  const installed = useExtensions((s) => s.installed.find((e) => e.id === id));
+  const installed = useExtensions((s) => s.installed.find((e) => e.id === id) ?? s.disabled.find((e) => e.id === id));
+  const installing = useInstallProgress(namespace, name) !== undefined;
   const [details, setDetails] = useState<ExtensionDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
@@ -165,7 +227,8 @@ export function ExtensionPage({ namespace, name }: { namespace: string; name: st
     extensionsApi.details(namespace, name).then(
       (loaded) => !cancelled && setDetails(loaded),
       async (e) => {
-        const local = useExtensions.getState().installed.find((x) => x.id === id);
+        const { installed: enabled, disabled } = useExtensions.getState();
+        const local = enabled.find((x) => x.id === id) ?? disabled.find((x) => x.id === id);
         const fallback = local ? await localDetails(local).catch(() => null) : null;
         if (cancelled) return;
         if (fallback) setDetails(fallback);
@@ -255,7 +318,17 @@ export function ExtensionPage({ namespace, name }: { namespace: string; name: st
             <div className="mt-1.5 flex items-center gap-3">
               <UpdateButton namespace={metadata.namespace} name={metadata.name} latest={metadata.version} />
               <InstallButton namespace={metadata.namespace} name={metadata.name} />
-              {installed && <span className="text-xs text-fg-subtle">Installed v{installed.manifest.version}</span>}
+              {!installing && <EnableButton id={id} />}
+              {installed && (
+                <span className="text-xs text-fg-subtle">
+                  Installed v{installed.manifest.version}
+                  {installed.disabled ? " · Disabled" : ""}
+                </span>
+              )}
+              {/* Before installing, or when an update is available: what it would download. */}
+              {!installing && (!installed || isNewerVersion(metadata.version, installed.manifest.version)) && (
+                <DownloadSize namespace={metadata.namespace} name={metadata.name} version={metadata.version} />
+              )}
             </div>
           </div>
         </header>
