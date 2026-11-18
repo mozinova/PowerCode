@@ -154,6 +154,8 @@ export const extensionsApi = {
     channel.onmessage = onProgress;
     return invoke<InstalledExtension>("extensions_install", { namespace, name, onProgress: channel });
   },
+  /** Installs a .vsix file from this computer. */
+  installVsix: (path: string) => invoke<InstalledExtension>("extensions_install_vsix", { path }),
   uninstall: (id: string) => invoke<void>("extensions_uninstall", { id }),
   readFile: (id: string, relative: string) =>
     invoke<string>("extensions_read_file", { id, relative }),

@@ -191,6 +191,21 @@ export const BUILTIN_SECTIONS: SettingsSection[] = [
     ],
   },
   {
+    id: "security",
+    title: "Security",
+    settings: [
+      {
+        key: "security.workspace.trust.enabled",
+        group: "Security › Workspace › Trust",
+        title: "Enabled",
+        description:
+          "Asks whether you trust a folder the first time it opens, and keeps untrusted folders in Restricted Mode (extensions that do not support it, Git and debugging stay off). Takes effect for folders opened afterwards.",
+        type: "boolean",
+        default: true,
+      },
+    ],
+  },
+  {
     id: "extensions",
     title: "Extensions",
     settings: [

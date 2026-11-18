@@ -19,6 +19,7 @@ import { createTranslator, type RemoteMapping } from "./remoteUris";
 import { parseDiffTab, parseWebviewTab, webviewTabPath } from "../lib/virtualTabs";
 import { track } from "../state/activity";
 import { ask, notify } from "../state/notifications";
+import { useTrust } from "../state/trust";
 import { openPaths, useWorkspace } from "../state/workspace";
 import { closeTerminal, newTerminal, setActiveTerminal, type TerminalSession } from "../terminal/sessions";
 import { cancelAllDialogs, showInputBox, showQuickPick } from "./dialogs";
@@ -49,13 +50,23 @@ const hasCode = (ext: InstalledExtension) => typeof ext.manifest.main === "strin
 /** What the running host was started for; a change means a restart. */
 let runningFor: string | null = null;
 
-function wantedFor(): { key: string | null; extensions: InstalledExtension[]; root: string | null } {
+/** Extensions that declare they work in Restricted Mode (`capabilities.untrustedWorkspaces`). */
+const supportsRestrictedMode = (ext: InstalledExtension) => {
+  const supported = (ext.manifest as { capabilities?: { untrustedWorkspaces?: { supported?: unknown } } }).capabilities?.untrustedWorkspaces?.supported;
+  return supported === true || supported === "limited";
+};
+
+function wantedFor(): { key: string | null; extensions: InstalledExtension[]; root: string | null; trusted: boolean } {
   const root = useWorkspace.getState().root;
-  const extensions = useExtensions.getState().installed.filter(hasCode);
+  const trust = useTrust.getState().state;
+  // While the trust question is open nothing starts; in Restricted Mode only the
+  // extensions that support it run, as in VS Code.
+  const trusted = trust === "trusted";
+  const extensions = useExtensions.getState().installed.filter((e) => hasCode(e) && (trusted || supportsRestrictedMode(e)));
   // In SSH and WSL workspaces the host runs on the remote (see `start`).
-  if (extensions.length === 0) return { key: null, extensions, root };
-  const key = JSON.stringify([root, extensions.map((e) => `${e.id}@${e.manifest.version}`)]);
-  return { key, extensions, root };
+  if (extensions.length === 0 || trust === "pending") return { key: null, extensions, root, trusted };
+  const key = JSON.stringify([root, trusted, extensions.map((e) => `${e.id}@${e.manifest.version}`)]);
+  return { key, extensions, root, trusted };
 }
 
 // ---- Lifecycle ------------------------------------------------------------------
@@ -74,7 +85,7 @@ function sync(force: boolean): Promise<void> {
   queue = queue.then(() => {
     const wanted = wantedFor();
     if (!force && wanted.key === runningFor && (wanted.key === null || rpc.isRunning())) return;
-    return wanted.key === null ? stop() : start(wanted.key, wanted.extensions, wanted.root);
+    return wanted.key === null ? stop() : start(wanted.key, wanted.extensions, wanted.root, wanted.trusted);
   }).catch((e) => log("error", `Extension host: ${errorMessage(e)}`));
   return queue;
 }
@@ -123,7 +134,7 @@ async function stop() {
   useExtensionHost.setState({ status: "stopped" });
 }
 
-async function start(key: string, extensions: InstalledExtension[], root: string | null) {
+async function start(key: string, extensions: InstalledExtension[], root: string | null, trusted: boolean) {
   await shutdownGracefully();
   forgetHostState();
   runningFor = key;
@@ -174,6 +185,8 @@ async function start(key: string, extensions: InstalledExtension[], root: string
         webviewOrigin: WEBVIEW_ORIGIN,
         colorThemeKind: activeThemeKind(),
         remote: mapping ?? null,
+        // `workspace.isTrusted`.
+        trusted,
         // A remote host maps its extensions' media (webviews, icons) to these local copies.
         localExtensionPaths: Object.fromEntries(extensions.map((e) => [e.id, e.path])),
       });
@@ -736,6 +749,10 @@ export function startExtensionHost() {
     if (s.root !== previous.root) scheduleSync();
   });
   // Installing, updating or uninstalling an extension with code restarts the host.
+  // Trusting the folder (or not) changes which extensions run.
+  useTrust.subscribe((s, previous) => {
+    if (s.state !== previous.state) scheduleSync(0);
+  });
   useExtensions.subscribe((s, previous) => {
     if (s.installed !== previous.installed) scheduleSync();
     // `window.activeColorTheme` follows the editor theme.

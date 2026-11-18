@@ -5,11 +5,13 @@ import { basename, isWithin, movedPath } from "./lib/paths";
 import { remoteLabel, remoteOf } from "./lib/remote";
 import { SETTINGS_TAB, customEditorTabPath, extensionTabPath, parseCustomEditorTab, parseDiffTab, tabFilePath } from "./lib/virtualTabs";
 import { useSettingsPage } from "./settings/page";
+import { installVsixFiles } from "./extensions/runtime";
 import { customEditorsFor, defaultTabFor, saveCustomEditorTab } from "./exthost/customEditors";
 import { showQuickPick } from "./exthost/dialogs";
 import { refreshGit } from "./git/store";
 import { saveIfDirty } from "./editor/autosave";
 import { pickRemoteFolder } from "./state/folderPicker";
+import { enterFolder } from "./state/trust";
 import { useSettings } from "./state/settings";
 import { notify } from "./state/notifications";
 import { openPaths, useWorkspace } from "./state/workspace";
@@ -55,6 +57,8 @@ export async function openFolder(path?: string) {
   const previous = useWorkspace.getState().root;
   disposeAllModels();
   closeAllTerminals();
+  // Trust first: nothing may run in the folder before the user decides (see state/trust.ts).
+  enterFolder(root);
   useWorkspace.getState().openFolder(root);
   endSshSession(previous, root);
   try {
@@ -86,6 +90,7 @@ export async function closeFolder(): Promise<boolean> {
   if (!(await confirmDiscard(tabs.filter((t) => t.dirty).map((t) => t.name)))) return false;
   disposeAllModels();
   closeAllTerminals();
+  enterFolder(null);
   useWorkspace.getState().closeFolder();
   endSshSession(root, null);
   try {
@@ -262,4 +267,15 @@ export async function reopenWith(tabPath: string, group?: number) {
 export function openSettings(query?: string) {
   useSettingsPage.setState(({ nonce }) => ({ query: query ?? "", nonce: nonce + 1 }));
   useWorkspace.getState().openFile(SETTINGS_TAB, "Settings");
+}
+
+/** Asks for .vsix files on this computer and installs them. */
+export async function pickAndInstallVsix() {
+  const picked = await open({
+    title: "Install from VSIX",
+    multiple: true,
+    filters: [{ name: "VS Code Extension", extensions: ["vsix"] }],
+  });
+  const paths = picked === null ? [] : Array.isArray(picked) ? picked : [picked];
+  if (paths.length > 0) await installVsixFiles(paths);
 }

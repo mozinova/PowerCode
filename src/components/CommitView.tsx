@@ -18,6 +18,7 @@ import { commit, initRepository, openDiff, rollback, stage, unstage } from "../g
 import { GIT_COLORS, GIT_LETTERS, fileState, refreshGit, useGit } from "../git/store";
 import type { GitFile } from "../lib/ipc";
 import { basename, isWithin, parentDir } from "../lib/paths";
+import { showTrustDialog, useTrust } from "../state/trust";
 import { useWorkspace } from "../state/workspace";
 import { FileIcon } from "./FileIcon";
 import { GitGraphSection } from "./GitGraph";
@@ -171,6 +172,7 @@ function CommitButton({
 export function CommitView() {
   const status = useGit((s) => s.status);
   const root = useWorkspace((s) => s.root);
+  const trust = useTrust((s) => s.state);
   const toggleTool = useWorkspace((s) => s.toggleTool);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -202,6 +204,17 @@ export function CommitView() {
 
       {!root ? (
         <p className="px-3 text-fg-muted">No folder is open.</p>
+      ) : trust !== "trusted" ? (
+        <div className="flex flex-col gap-2 px-3 text-fg-muted">
+          <p>Git is off in Restricted Mode: a repository's settings can run commands, so PowerCode does not run Git in folders you have not trusted.</p>
+          <button
+            type="button"
+            onClick={() => showTrustDialog(root)}
+            className="h-7 w-fit rounded-md bg-accent px-3 font-medium text-white hover:bg-accent-hover"
+          >
+            Manage Workspace Trust
+          </button>
+        </div>
       ) : !status?.isRepo ? (
         <NotARepository />
       ) : (

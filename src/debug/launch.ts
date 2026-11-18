@@ -10,7 +10,8 @@ import { useExtensionHost } from "../exthost/state";
 import { useExtensions } from "../extensions/runtime";
 import { fsApi } from "../lib/ipc";
 import { joinPath } from "../lib/paths";
-import { notify } from "../state/notifications";
+import { ask, notify } from "../state/notifications";
+import { isTrusted, showTrustDialog } from "../state/trust";
 import { useWorkspace } from "../state/workspace";
 import { debugContinue, startConfiguration, useDebug } from "./model";
 
@@ -107,6 +108,13 @@ async function pickDebugger(): Promise<string | null> {
 export async function startDebugging(noDebug = false) {
   const { sessions } = useDebug.getState();
   if (!noDebug && sessions.some((s) => s.status === "stopped")) return debugContinue();
+  const root = useWorkspace.getState().root;
+  if (root && !isTrusted()) {
+    // Debugging runs the folder's code (and launch.json): only in trusted folders.
+    const choice = await ask("info", "Debugging is disabled in Restricted Mode", "Trust this folder to run and debug its code.", ["Manage Workspace Trust"]);
+    if (choice === 0) showTrustDialog(root);
+    return;
+  }
   if (useExtensionHost.getState().status !== "running") {
     notify("info", "Extensions are not running", "Debuggers are provided by extensions; install one and open a local folder.");
     return;

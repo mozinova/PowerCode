@@ -2,7 +2,7 @@
 
 import { ask } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, openSettings, reopenWith, saveActive } from "./actions";
+import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, openSettings, pickAndInstallVsix, reopenWith, saveActive } from "./actions";
 import { focusFindInFiles } from "./components/SearchView";
 import { saveModel } from "./editor/models";
 import { fetchAll, initRepository, pull, pushBranch } from "./git/actions";
@@ -18,6 +18,7 @@ import { setAutoSave, setAutoUpdateExtensions, useSettings } from "./state/setti
 import { checkForUpdates, useExtensions } from "./extensions/runtime";
 import { restartExtensionHost, showOutput } from "./exthost/host";
 import { openUserSettings } from "./exthost/settings";
+import { showTrustDialog } from "./state/trust";
 import { installShellCommand, registerOpenWith, uninstallShellCommand, unregisterOpenWith } from "./cli";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
@@ -137,6 +138,7 @@ export const COMMANDS: Command[] = [
       if (ids.length === 0) notify("info", "All extensions are up to date");
     },
   },
+  { id: "extensions.installVsix", category: "Extensions", label: "Install from VSIX…", run: pickAndInstallVsix },
   {
     id: "extensions.toggleAutoUpdate",
     category: "Extensions",
@@ -180,6 +182,13 @@ export const COMMANDS: Command[] = [
   },
   { id: "preferences.theme", category: "Preferences", label: "Color Theme / File Icon Theme", run: () => showTool("extensions") },
   { id: "preferences.settings", category: "Preferences", label: "Open Settings", shortcut: "Ctrl+,", run: () => openSettings() },
+  {
+    id: "workspace.manageTrust",
+    category: "Workspaces",
+    label: "Manage Workspace Trust",
+    when: hasFolder,
+    run: () => showTrustDialog(useWorkspace.getState().root!),
+  },
   { id: "shell.install", category: "Shell Command", label: "Install 'powercode' Command in PATH", run: installShellCommand },
   { id: "shell.uninstall", category: "Shell Command", label: "Uninstall 'powercode' Command from PATH", run: uninstallShellCommand },
   { id: "system.registerOpenWith", category: "System", label: "Add PowerCode to \"Open With\" and Context Menus", when: () => !IS_MAC, run: registerOpenWith },

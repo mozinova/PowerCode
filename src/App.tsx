@@ -20,6 +20,7 @@ import { HostDialogs } from "./components/HostDialogs";
 import { OutputPanel } from "./components/OutputPanel";
 import { Toasts } from "./components/Toasts";
 import { TooltipLayer } from "./components/Tooltip";
+import { TrustDialog } from "./components/TrustDialog";
 import { WebviewLayer } from "./components/WebviewFrame";
 import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
@@ -198,6 +199,7 @@ export default function App() {
       <StatusBar />
       <RemoteFolderPicker />
       <WebviewLayer />
+      <TrustDialog />
       <HostDialogs />
       <Toasts />
       <TooltipLayer />

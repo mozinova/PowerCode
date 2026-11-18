@@ -857,7 +857,9 @@ export function createApi(description: ExtensionDescription) {
         return host.workspaceFolders[0]?.uri.fsPath;
       },
       workspaceFile: undefined,
-      isTrusted: true,
+      get isTrusted() {
+        return host.trusted;
+      },
       get textDocuments() {
         return [...documents.values()].filter((d) => !d.isClosed);
       },
@@ -897,6 +899,7 @@ export function createApi(description: ExtensionDescription) {
       onWillCreateFiles: never(),
       onWillDeleteFiles: never(),
       onWillRenameFiles: never(),
+      // The UI restarts the host when trust is granted, so this never fires within a host.
       onDidGrantWorkspaceTrust: never(),
       onDidOpenNotebookDocument: never(),
       onDidCloseNotebookDocument: never(),

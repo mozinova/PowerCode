@@ -117,6 +117,18 @@ fn installed_platform(app: &AppHandle, id: &str, metadata: &ExtensionMetadata) -
     recorded.unwrap_or_else(|| metadata.target_platform.clone().unwrap_or_else(|| "universal".to_string()))
 }
 
+/// The install info written next to an installed extension (platform, and `source: "vsix"` for files).
+fn install_info(app: &AppHandle, id: &str) -> Option<serde_json::Value> {
+    let text = std::fs::read_to_string(extensions_dir(app).ok()?.join(id.to_lowercase()).join(INSTALL_INFO)).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Installed from a .vsix file: kept as installed (a local or development build), not
+/// replaced by Open VSX's version.
+fn installed_from_file(app: &AppHandle, id: &str) -> bool {
+    install_info(app, id).is_some_and(|info| info.get("source").and_then(|s| s.as_str()) == Some("vsix"))
+}
+
 /// Latest published version of each installed `namespace.name` id, queried in parallel.
 /// Extensions Open VSX does not know (or that fail to load) are left out.
 #[tauri::command]
@@ -128,7 +140,7 @@ pub async fn openvsx_latest_versions(
         .into_iter()
         .filter_map(|id| {
             let (namespace, name) = id.split_once('.')?;
-            if validate_segment(namespace).is_err() || validate_segment(name).is_err() {
+            if validate_segment(namespace).is_err() || validate_segment(name).is_err() || installed_from_file(&app, &id) {
                 return None;
             }
             let url = format!("{OPEN_VSX_API}/{namespace}/{name}");
@@ -417,6 +429,62 @@ pub async fn extensions_install(
     .map_err(err)?
 }
 
+/// What a .vsix declares: its `package.json` (for the id) and its platform
+/// (`TargetPlatform` in `extension.vsixmanifest`, absent for universal packages).
+fn read_vsix_identity(path: &Path) -> CmdResult<(serde_json::Value, String)> {
+    let file = std::fs::File::open(path).map_err(|e| format!("Could not open {}: {e}", path.display()))?;
+    let mut zip = zip::ZipArchive::new(std::io::BufReader::new(file)).map_err(|_| "This file is not a VS Code extension package (.vsix).".to_string())?;
+    let mut read = |name: &str| -> Option<String> {
+        let mut entry = zip.by_name(name).ok()?;
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut text).ok()?;
+        Some(text)
+    };
+    let manifest = read("extension/package.json").ok_or("The package has no extension/package.json.")?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest).map_err(|e| format!("Invalid package.json: {e}"))?;
+    let platform = read("extension.vsixmanifest")
+        .and_then(|xml| regex::Regex::new(r#"TargetPlatform="([^"]+)""#).ok()?.captures(&xml).map(|c| c[1].to_string()))
+        .unwrap_or_else(|| "universal".into());
+    Ok((manifest, platform))
+}
+
+/// Installs an extension from a .vsix file on this computer (replacing the installed
+/// version, if any). Packages for another platform are refused, as in VS Code.
+#[tauri::command]
+pub async fn extensions_install_vsix(app: AppHandle, path: String) -> CmdResult<InstalledExtension> {
+    let root = extensions_dir(&app)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let package = PathBuf::from(&path);
+        let (manifest, platform) = read_vsix_identity(&package)?;
+        let publisher = manifest["publisher"].as_str().unwrap_or_default();
+        let name = manifest["name"].as_str().unwrap_or_default();
+        validate_segment(publisher).map_err(|_| "The package's publisher is missing or invalid.".to_string())?;
+        validate_segment(name).map_err(|_| "The package's name is missing or invalid.".to_string())?;
+        let current = current_target_platform();
+        if platform != "universal" && platform != current {
+            return Err(format!("This package is built for {platform}; PowerCode runs on {current}. Get the {current} package of the extension."));
+        }
+
+        let id = format!("{publisher}.{name}").to_lowercase();
+        let staging = root.join(format!(".staging-{id}"));
+        let dest = root.join(&id);
+        let _ = std::fs::remove_dir_all(&staging);
+        let file = std::fs::File::open(&package).map_err(err)?;
+        extract_vsix(std::io::BufReader::new(file), &staging).inspect_err(|_| {
+            let _ = std::fs::remove_dir_all(&staging);
+        })?;
+        let info = serde_json::json!({ "targetPlatform": platform, "source": "vsix" });
+        std::fs::write(staging.join(INSTALL_INFO), info.to_string()).map_err(err)?;
+        if dest.exists() {
+            std::fs::remove_dir_all(&dest).map_err(err)?;
+        }
+        std::fs::rename(&staging, &dest).map_err(err)?;
+        read_installed(&dest).ok_or_else(|| "Invalid extension manifest.".to_string())
+    })
+    .await
+    .map_err(err)?
+}
+
 #[tauri::command(async)]
 pub fn extensions_uninstall(app: AppHandle, id: String) -> CmdResult<()> {
     validate_segment(&id)?;
@@ -487,6 +555,38 @@ mod tests {
         assert!(dest.join("out").join("main.js").is_file());
         assert!(!dir.join("escape.txt").exists() && !dest.join("escape.txt").exists(), "no path traversal");
         assert!(!dest.join("extension.vsixmanifest").exists(), "only the extension/ folder");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_vsix(path: &Path, package_json: &str, target_platform: Option<&str>) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("extension/package.json", options).unwrap();
+        zip.write_all(package_json.as_bytes()).unwrap();
+        zip.start_file("extension.vsixmanifest", options).unwrap();
+        let platform = target_platform.map(|p| format!(r#" TargetPlatform="{p}""#)).unwrap_or_default();
+        zip.write_all(format!(r#"<PackageManifest><Metadata><Identity Id="x" Version="1.0.0" Publisher="me"{platform}/></Metadata></PackageManifest>"#).as_bytes()).unwrap();
+        zip.finish().unwrap();
+    }
+
+    #[test]
+    fn reads_vsix_identity_and_platform() {
+        let dir = std::env::temp_dir().join(format!("powercode-vsix-identity-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let universal = dir.join("u.vsix");
+        write_vsix(&universal, r#"{"publisher":"Me","name":"tool","version":"1.2.3"}"#, None);
+        let (manifest, platform) = read_vsix_identity(&universal).unwrap();
+        assert_eq!((manifest["publisher"].as_str(), manifest["name"].as_str(), platform.as_str()), (Some("Me"), Some("tool"), "universal"));
+
+        let linux = dir.join("l.vsix");
+        write_vsix(&linux, r#"{"publisher":"me","name":"native"}"#, Some("linux-arm64"));
+        assert_eq!(read_vsix_identity(&linux).unwrap().1, "linux-arm64");
+
+        let not_a_zip = dir.join("x.vsix");
+        std::fs::write(&not_a_zip, "hello").unwrap();
+        assert!(read_vsix_identity(&not_a_zip).unwrap_err().contains("not a VS Code extension package"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

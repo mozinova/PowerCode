@@ -338,6 +338,32 @@ export async function installExtension(namespace: string, name: string) {
   } finally {
     setInstalling(key, null);
   }
+  await finishInstall(ext);
+  return ext;
+}
+
+/**
+ * Installs extensions from .vsix files on this computer, one after another; reports
+ * each result. Returns the ones installed.
+ */
+export async function installVsixFiles(paths: string[]): Promise<InstalledExtension[]> {
+  const installed: InstalledExtension[] = [];
+  for (const path of paths) {
+    const file = path.split(/[\\/]/).pop() ?? path;
+    try {
+      const ext = await track(`Installing ${file}…`, () => extensionsApi.installVsix(path));
+      await finishInstall(ext);
+      installed.push(ext);
+      notify("success", `Installed ${ext.manifest.displayName ?? ext.manifest.name} ${ext.manifest.version}`, `From ${file}`);
+    } catch (e) {
+      notify("error", `Could not install ${file}`, errorMessage(e));
+    }
+  }
+  return installed;
+}
+
+/** Applies a just-installed (or reinstalled) extension: contributions, the list, themes. */
+async function finishInstall(ext: InstalledExtension) {
   deactivate(ext.id);
   await activate(ext);
   const others = useExtensions.getState().installed.filter((e) => e.id !== ext.id);
@@ -348,7 +374,6 @@ export async function installExtension(namespace: string, name: string) {
     return { updates: rest, wrongPlatform: otherPlatforms };
   });
   await reapplyThemesFrom(ext.id);
-  return ext;
 }
 
 /** After an update, themes from the extension are reloaded so their new colours show. */

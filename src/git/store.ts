@@ -6,6 +6,7 @@ import { gitApi, type GitFile, type GitStatus } from "../lib/ipc";
 import { isWithin, parentDir } from "../lib/paths";
 import { pathKey } from "../lib/platform";
 import { track } from "../state/activity";
+import { isTrusted, useTrust } from "../state/trust";
 import { useWorkspace } from "../state/workspace";
 
 export type GitFileState = "modified" | "added" | "deleted" | "renamed" | "untracked" | "ignored" | "conflicted";
@@ -112,7 +113,8 @@ export async function refreshGit() {
     return;
   }
   const root = useWorkspace.getState().root;
-  if (!root) {
+  // In Restricted Mode git does not run: a repository's config can run commands (e.g. `core.fsmonitor`).
+  if (!root || !isTrusted()) {
     useGit.setState({ status: null, files: new Map(), folders: new Map(), ignored: [] });
     return;
   }
@@ -142,6 +144,9 @@ const POLL_INTERVAL_MS = 5000;
 export function startGitWatcher() {
   useWorkspace.subscribe((state, previous) => {
     if (state.root !== previous.root) void refreshGit();
+  });
+  useTrust.subscribe((state, previous) => {
+    if (state.state !== previous.state) void refreshGit();
   });
   window.addEventListener("focus", () => void refreshGit());
   // Picks up changes made outside the app, e.g. from the terminal.

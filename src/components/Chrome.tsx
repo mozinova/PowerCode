@@ -2,7 +2,7 @@
 //! (the tool window stripes are in ToolStripes.tsx).
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronDown, Copy, Loader2, Menu, Minus, Server, Square, Unplug, X, type LucideIcon } from "lucide-react";
+import { ChevronDown, Copy, Loader2, Menu, Minus, Server, ShieldAlert, Square, Unplug, X, type LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { closeActiveTab, closeFolder, closeRemoteConnection, openFolder, openSettings, saveActive } from "../actions";
 import { basename } from "../lib/paths";
@@ -10,6 +10,7 @@ import { remoteLabel, remoteOf } from "../lib/remote";
 import * as hostRpc from "../exthost/rpc";
 import { useExtensionHost, type StatusItem as ExtensionStatusItem } from "../exthost/state";
 import { CodiconText } from "./ExtIcon";
+import { showTrustDialog, useTrust } from "../state/trust";
 import { useActivity } from "../state/activity";
 import { notify } from "../state/notifications";
 import { setAutoSave, useSettings } from "../state/settings";
@@ -179,6 +180,24 @@ function ExtensionStatusItems({ alignment }: { alignment: 1 | 2 }) {
   );
 }
 
+/** Shown while the open folder is in Restricted Mode; opens the trust dialog. */
+function RestrictedModeIndicator() {
+  const root = useWorkspace((s) => s.root);
+  const state = useTrust((s) => s.state);
+  if (!root || state === "trusted") return null;
+  return (
+    <button
+      type="button"
+      {...tooltipProps("Restricted Mode: extensions, Git and debugging are limited until you trust this folder")}
+      onClick={() => showTrustDialog(root)}
+      className="mr-2 flex h-full items-center gap-1.5 bg-[#e0b84c] px-2.5 font-medium text-[#1e1f22] hover:bg-[#ecc65a]"
+    >
+      <ShieldAlert size={13} />
+      Restricted Mode
+    </button>
+  );
+}
+
 /** VS Code's remote indicator: where the open folder lives, at the far left of the status bar. */
 function RemoteIndicator() {
   const root = useWorkspace((s) => s.root);
@@ -246,6 +265,7 @@ export function StatusBar() {
     <footer className="relative flex h-6 shrink-0 items-center justify-between gap-4 px-2 text-xs text-fg-muted">
       <div className="flex h-full min-w-0 items-center truncate">
         <RemoteIndicator />
+        <RestrictedModeIndicator />
         <ActivityIndicator />
         {crumbs.map((crumb, i) => (
           <span key={i} className="flex items-center">

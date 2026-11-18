@@ -83,6 +83,7 @@ pub fn run() {
             extensions::openvsx_latest_versions,
             extensions::extensions_list,
             extensions::extensions_install,
+            extensions::extensions_install_vsix,
             extensions::extensions_uninstall,
             extensions::extensions_read_file,
             cli::cli_take_pending,

@@ -1,8 +1,8 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { BadgeCheck, Blocks, Download, Loader2, Minus, RefreshCw, Search, Trash2 } from "lucide-react";
+import { BadgeCheck, Blocks, Download, Loader2, Minus, RefreshCw, Search, Trash2, Upload } from "lucide-react";
 import { useEffect, useState } from "react";
 import { setIconTheme, useIconThemes } from "../extensions/iconThemes";
-import { openExtensionPage } from "../actions";
+import { openExtensionPage, pickAndInstallVsix } from "../actions";
 import {
   checkForUpdates,
   installExtension,
@@ -277,6 +277,7 @@ export function ExtensionsView() {
   return (
     <div className="flex h-full flex-col">
       <ToolWindowHeader title="Extensions">
+        <IconButton icon={Upload} title="Install from VSIX…" onClick={() => void pickAndInstallVsix()} className="size-7" />
         <IconButton
           icon={RefreshCw}
           title="Check for Extension Updates"
