@@ -14,8 +14,11 @@ import { fileURLToPath } from "node:url";
 const NODE_VERSION = "24.19.0";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+// The target being built: an argument, Tauri's (set for `beforeBuildCommand`,
+// e.g. `--target x86_64-apple-darwin` on an ARM Mac), else this machine's.
 const triple =
   process.argv[2] ??
+  process.env.TAURI_ENV_TARGET_TRIPLE ??
   execFileSync("rustc", ["-vV"], { encoding: "utf8" })
     .split("\n")
     .find((l) => l.startsWith("host:"))

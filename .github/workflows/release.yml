@@ -1,0 +1,124 @@
+# Builds PowerCode for Windows, Linux and macOS (Apple Silicon and Intel) when a
+# tag is pushed, and attaches the installers to a draft GitHub release.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# A `vX.Y.Z` tag also becomes the app's version in the build.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "*"
+  # Also runnable by hand (Actions → Release → Run workflow), on an existing tag.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows (x64)
+            runner: windows-latest
+            args: ""
+            rust-targets: ""
+          - name: Linux (x64)
+            runner: ubuntu-22.04
+            args: ""
+            rust-targets: ""
+          - name: macOS (Apple Silicon)
+            runner: macos-latest
+            args: --target aarch64-apple-darwin
+            rust-targets: aarch64-apple-darwin
+          - name: macOS (Intel)
+            runner: macos-latest
+            args: --target x86_64-apple-darwin
+            rust-targets: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev patchelf file
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+          key: ${{ matrix.rust-targets || matrix.runner }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # `v1.2.3` → version 1.2.3 in the app, its installers and About (not committed).
+      - name: Version from the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            node -e '
+              const fs = require("fs");
+              const version = process.argv[1];
+              for (const file of ["package.json", "src-tauri/tauri.conf.json"]) {
+                const json = JSON.parse(fs.readFileSync(file, "utf8"));
+                json.version = version;
+                fs.writeFileSync(file, JSON.stringify(json, null, 2) + "\n");
+              }
+              const cargo = "src-tauri/Cargo.toml";
+              fs.writeFileSync(cargo, fs.readFileSync(cargo, "utf8").replace(/^version = ".*"$/m, `version = "${version}"`));
+              // MSI versions are numbers only: pre-releases (1.2.0-beta.1) get just the .exe installer on Windows.
+              if (version.includes("-") && process.platform === "win32") {
+                const file = "src-tauri/tauri.conf.json";
+                const json = JSON.parse(fs.readFileSync(file, "utf8"));
+                json.bundle.targets = ["nsis"];
+                fs.writeFileSync(file, JSON.stringify(json, null, 2) + "\n");
+              }
+            ' "$version"
+            echo "Building version $version"
+          else
+            echo "Tag $GITHUB_REF_NAME is not semver; keeping the version in tauri.conf.json"
+          fi
+
+      # The bundled Node.js for extensions and the extension host are prepared by
+      # `beforeBuildCommand` (scripts/fetch-node.mjs picks the target's Node.js).
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tauriScript: bun tauri
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
+          releaseName: PowerCode ${{ github.ref_name }}
+          releaseBody: |
+            Installers for Windows, Linux and macOS (Apple Silicon and Intel).
+
+            - **Windows**: `.exe` (installer) or `.msi`
+            - **Linux**: `.deb`, `.rpm` or `.AppImage`
+            - **macOS**: `.dmg` (`aarch64` for Apple Silicon, `x64` for Intel)
+          releaseDraft: true
+          prerelease: false
