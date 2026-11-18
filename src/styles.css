@@ -1,0 +1,206 @@
+@import "tailwindcss";
+@import "@xterm/xterm/css/xterm.css";
+
+/* IntelliJ New UI — Dark */
+@theme {
+  --color-editor: #1e1f22;
+  --color-panel: #2b2d30;
+  --color-line: #1e1f22;
+  --color-line-soft: #393b40;
+  --color-hover: #393b40;
+  --color-selected: #2e436e;
+  --color-selected-inactive: #43454a;
+  --color-fg: #dfe1e5;
+  --color-fg-muted: #868a91;
+  --color-fg-subtle: #6f737a;
+  --color-accent: #3574f0;
+  --color-accent-hover: #4682fa;
+  --color-input: #1e1f22;
+  --color-input-border: #4e5157;
+  --color-danger: #db5c5c;
+  --color-modified: #70aeff;
+
+  --font-ui: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --font-code: "JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--color-panel);
+  color: var(--color-fg);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #4e515780;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #6f737a;
+}
+::-webkit-scrollbar-corner,
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Resize handles between tool windows: invisible 1px line with a wider hit area. */
+[data-separator] {
+  position: relative;
+  background: var(--color-line);
+  flex: 0 0 1px;
+}
+[data-separator="active"],
+[data-separator="hover"] {
+  background: var(--color-accent);
+}
+[data-separator]::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  z-index: 10;
+}
+[data-separator][aria-orientation="vertical"]::after {
+  inset: 0 -3px;
+}
+[data-separator][aria-orientation="horizontal"]::after {
+  inset: -3px 0;
+}
+
+/* Rendered READMEs on extension pages, close to GitHub's markdown style. */
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: break-word;
+}
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+.markdown-body :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.4em 0 0.6em;
+  font-weight: 600;
+  line-height: 1.25;
+}
+.markdown-body :is(h1, h2) {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--color-line-soft);
+}
+.markdown-body h1 {
+  font-size: 1.8em;
+}
+.markdown-body h2 {
+  font-size: 1.4em;
+}
+.markdown-body h3 {
+  font-size: 1.2em;
+}
+.markdown-body :is(p, ul, ol, blockquote, pre, table) {
+  margin: 0 0 1em;
+}
+.markdown-body ul {
+  list-style: disc;
+  padding-left: 2em;
+}
+.markdown-body ol {
+  list-style: decimal;
+  padding-left: 2em;
+}
+.markdown-body a {
+  color: #548af7;
+}
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+.markdown-body code {
+  font-family: var(--font-code);
+  font-size: 0.9em;
+  background: var(--color-panel);
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+.markdown-body pre {
+  background: var(--color-panel);
+  padding: 12px 14px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+}
+.markdown-body blockquote {
+  border-left: 3px solid var(--color-line-soft);
+  padding-left: 1em;
+  color: var(--color-fg-muted);
+}
+.markdown-body img {
+  display: inline;
+  max-width: 100%;
+}
+.markdown-body table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.markdown-body :is(th, td) {
+  border: 1px solid var(--color-line-soft);
+  padding: 6px 12px;
+}
+.markdown-body th {
+  background: var(--color-panel);
+}
+.markdown-body hr {
+  margin: 1.5em 0;
+  border: 0;
+  border-top: 1px solid var(--color-line-soft);
+}
+
+.xterm {
+  padding: 4px 0 0 8px;
+  height: 100%;
+}
+.xterm-viewport {
+  background-color: transparent !important;
+}
+
+/* Git change marks in the editor gutter (IntelliJ New UI dark colours). */
+.monaco-editor .git-gutter-added,
+.monaco-editor .git-gutter-modified {
+  margin-left: 3px;
+  width: 3px !important;
+}
+.monaco-editor .git-gutter-added {
+  background: #549159;
+}
+.monaco-editor .git-gutter-modified {
+  background: #375fad;
+}
+.monaco-editor .git-gutter-deleted::before,
+.monaco-editor .git-gutter-deleted-below::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  border: 4px solid transparent;
+  border-left-color: #868a91;
+}
+.monaco-editor .git-gutter-deleted::before {
+  top: -4px;
+}
+.monaco-editor .git-gutter-deleted-below::before {
+  bottom: -4px;
+}
