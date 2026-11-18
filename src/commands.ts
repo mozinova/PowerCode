@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, openSettings, pickAndInstallVsix, reopenWith, saveActive } from "./actions";
 import { focusFindInFiles } from "./components/SearchView";
 import { focusSymbolSearch } from "./components/FileSearch";
+import { configureTasks, runTask, terminateTask } from "./exthost/tasks";
 import { saveModel } from "./editor/models";
 import { fetchAll, initRepository, pull, pushBranch } from "./git/actions";
 import { useGit } from "./git/store";
@@ -108,6 +109,11 @@ export const COMMANDS: Command[] = [
   { id: "view.project", category: "View", label: "Show Project", shortcut: "Alt+1", run: () => showTool("project") },
   { id: "view.commit", category: "View", label: "Show Commit", shortcut: "Alt+0", run: () => showTool("commit") },
   { id: "view.search", category: "View", label: "Find in Files", shortcut: "Ctrl+Shift+F", run: focusFindInFiles },
+  { id: "tasks.run", category: "Tasks", label: "Run Task…", when: hasFolder, run: () => void runTask() },
+  { id: "tasks.build", category: "Tasks", label: "Run Build Task…", shortcut: "Ctrl+Shift+B", when: hasFolder, run: () => void runTask("build") },
+  { id: "tasks.test", category: "Tasks", label: "Run Test Task…", when: hasFolder, run: () => void runTask("test") },
+  { id: "tasks.terminate", category: "Tasks", label: "Terminate Task…", when: hasFolder, run: () => void terminateTask() },
+  { id: "tasks.configure", category: "Tasks", label: "Configure Tasks (tasks.json)", when: hasFolder, run: () => void configureTasks() },
   { id: "go.symbol", category: "Go", label: "Go to Symbol in Workspace…", shortcut: "Ctrl+T", when: hasFolder, run: () => focusSymbolSearch() },
   { id: "view.remote", category: "View", label: "Show Remote Hosts", run: () => showTool("remote") },
   { id: "view.extensions", category: "View", label: "Show Extensions", shortcut: "Alt+2", run: () => showTool("extensions") },

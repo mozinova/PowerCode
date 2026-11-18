@@ -17,6 +17,7 @@ import * as views from "./views";
 import * as decorations from "./decorations";
 import * as files from "./files";
 import * as tabs from "./tabs";
+import * as tasks from "./tasks";
 import * as terminals from "./terminals";
 import * as virtual from "./virtual";
 import { SURFACE, TOP_LEVEL, type MemberKind } from "./surface";
@@ -963,7 +964,8 @@ export function createApi(description: ExtensionDescription) {
       registerTextDocumentContentProvider: (scheme: string, provider: unknown) => virtual.registerContentProvider(scheme, provider),
       registerFileSystemProvider: (scheme: string, provider: unknown, options?: { isReadonly?: unknown }) =>
         virtual.registerFileSystem(scheme, provider, options),
-      registerTaskProvider: () => new Disposable(() => {}),
+      // Deprecated home of `tasks.registerTaskProvider`.
+      registerTaskProvider: (type: string, provider: unknown) => tasks.registerTaskProvider(type, provider),
       onDidOpenTextDocument: onDidOpen.event,
       onDidCloseTextDocument: onDidClose.event,
       onDidChangeTextDocument: onDidChange.event,
@@ -1106,7 +1108,18 @@ export function createApi(description: ExtensionDescription) {
 
     debug: debugApi,
     // Not implemented yet: completed from the API's definition below.
-    tasks: {},
+    tasks: {
+      registerTaskProvider: tasks.registerTaskProvider,
+      fetchTasks: tasks.fetchTasks,
+      executeTask: tasks.executeTask,
+      get taskExecutions() {
+        return tasks.taskExecutions();
+      },
+      onDidStartTask: tasks.onDidStartTask.event,
+      onDidEndTask: tasks.onDidEndTask.event,
+      onDidStartTaskProcess: tasks.onDidStartTaskProcess.event,
+      onDidEndTaskProcess: tasks.onDidEndTaskProcess.event,
+    },
     scm: {},
     comments: {},
     tests: {},

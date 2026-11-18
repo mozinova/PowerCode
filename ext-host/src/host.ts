@@ -14,6 +14,7 @@ import * as views from "./views";
 import * as debug from "./debug";
 import * as files from "./files";
 import * as tabs from "./tabs";
+import * as tasks from "./tasks";
 import * as terminals from "./terminals";
 import * as virtual from "./virtual";
 import { collectDefaults, host, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
@@ -251,6 +252,7 @@ function containsMatch(dir: string, globs: string[], depth: number): boolean {
 
 setCommandActivator(async (command) => activateByEvent(`onCommand:${command}`));
 debug.setDebugActivator(activateByEvent);
+tasks.setTaskActivator(activateByEvent);
 
 // ---- Messages from the UI ---------------------------------------------------
 
@@ -384,6 +386,7 @@ virtual.listen();
 tabs.listen();
 files.listen();
 terminals.listen();
+tasks.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

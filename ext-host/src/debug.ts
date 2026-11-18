@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { currentEditor, executeCommand } from "./api";
 import * as rpc from "./rpc";
 import { host, lookup, type ExtensionDescription } from "./state";
+import { runTaskAfterDebugging, runTaskForDebugging } from "./tasks";
 import {
   CancellationTokenSource,
   DebugAdapterExecutable,
@@ -246,6 +247,8 @@ function endSession(session: Session, notifyUi: boolean) {
   sessions.delete(session.id);
   if (notifyUi) rpc.notify("debug/sessionEnded", { sessionId: session.id });
   onDidTerminateDebugSession.fire(session.api);
+  const postDebugTask = session.api.configuration?.postDebugTask;
+  if (!session.api.parentSession && typeof postDebugTask === "string") runTaskAfterDebugging(postDebugTask);
   if (activeSession === session.api) {
     activeSession = [...sessions.values()].pop()?.api;
     onDidChangeActiveDebugSession.fire(activeSession);
@@ -255,7 +258,7 @@ function endSession(session: Session, notifyUi: boolean) {
 // ---- Configurations -----------------------------------------------------------------
 
 /** Parses JSON with comments and trailing commas, as `launch.json` allows. */
-function parseJsonc(text: string): any {
+export function parseJsonc(text: string): any {
   let out = "";
   let inString = false;
   for (let i = 0; i < text.length; i++) {
@@ -298,7 +301,8 @@ export interface DebugContext {
 
 let lastContext: DebugContext = {};
 
-async function substitute(value: unknown, context: DebugContext): Promise<unknown> {
+/** Resolves `${workspaceFolder}`, `${file}`, `${env:X}`, `${config:X}`, `${command:X}`, ... (also for tasks). */
+export async function substitute(value: unknown, context: DebugContext): Promise<unknown> {
   if (typeof value === "string") {
     const folder = host.workspaceFolders[0]?.uri.fsPath ?? "";
     const file = context.file ?? "";
@@ -408,6 +412,8 @@ async function startSession(
     if (!config) return undefined;
   }
   if (!config.type) throw new Error("The debug configuration has no type.");
+  // A build (or other task) before debugging; failing, the user decides.
+  if (!options.parent && typeof config.preLaunchTask === "string" && !(await runTaskForDebugging(config.preLaunchTask))) return undefined;
   await activate(`onDebugAdapterProtocolTracker:${config.type}`);
 
   const id = `debug-${nextSession++}`;

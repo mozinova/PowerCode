@@ -44,6 +44,7 @@ import { useTrust } from "../state/trust";
 import { openPaths, useWorkspace } from "../state/workspace";
 import { newTerminal, setActiveTerminal, type TerminalSession } from "../terminal/sessions";
 import { registerTerminalHandlers, resetTerminals, syncTerminals } from "./terminals";
+import { runTask, terminateTask } from "./tasks";
 import { cancelAllDialogs, showInputBox, showQuickPick } from "./dialogs";
 import { pathFromUri, registerProvider, resetLanguageFeatures, setDiagnostics, setDocumentFlusher, unregisterProvider } from "./languages";
 import * as rpc from "./rpc";
@@ -86,8 +87,9 @@ function wantedFor(): { key: string | null; extensions: InstalledExtension[]; ro
   // extensions that support it run, as in VS Code.
   const trusted = trust === "trusted";
   const extensions = useExtensions.getState().installed.filter((e) => hasCode(e) && (trusted || supportsRestrictedMode(e)));
-  // In SSH and WSL workspaces the host runs on the remote (see `start`).
-  if (extensions.length === 0 || trust === "pending") return { key: null, extensions, root, trusted };
+  // In SSH and WSL workspaces the host runs on the remote (see `start`). Without
+  // extensions it only runs when something needs it (tasks.json, see `ensureExtensionHost`).
+  if ((extensions.length === 0 && !demanded) || trust === "pending") return { key: null, extensions, root, trusted };
   const key = JSON.stringify([root, trusted, extensions.map((e) => `${e.id}@${e.manifest.version}`)]);
   return { key, extensions, root, trusted };
 }
@@ -115,6 +117,25 @@ function sync(force: boolean): Promise<void> {
 
 export function restartExtensionHost() {
   return sync(true);
+}
+
+/** Set when a feature needs the host although no extension has code (until the folder changes). */
+let demanded = false;
+
+/**
+ * Starts the host if it is not running, for features it serves without any
+ * extension (tasks.json tasks). False when it cannot run: the folder is not trusted.
+ */
+export async function ensureExtensionHost(): Promise<boolean> {
+  if (useTrust.getState().state !== "trusted") {
+    notify("info", "Tasks need a trusted folder", "Trust this folder to run its tasks.");
+    return false;
+  }
+  if (rpc.isRunning()) return true;
+  demanded = true;
+  window.clearTimeout(restartTimer);
+  await sync(false);
+  return rpc.isRunning();
 }
 
 async function shutdownGracefully() {
@@ -526,6 +547,21 @@ async function executeBuiltin(command: string, args: any[]): Promise<unknown> {
       useWorkspace.getState().openFile(compareTabPath(left.$uri, right.$uri), name);
       return null;
     }
+    case "workbench.action.tasks.runTask":
+      // With a task's label (`type: name` for extensions' tasks), that task; otherwise the picker.
+      if (typeof args[0] === "string" || typeof args[0]?.task === "string") {
+        await rpc.request("tasks/runByLabel", { label: typeof args[0] === "string" ? args[0] : args[0].task });
+      } else void runTask();
+      return null;
+    case "workbench.action.tasks.build":
+      void runTask("build");
+      return null;
+    case "workbench.action.tasks.test":
+      void runTask("test");
+      return null;
+    case "workbench.action.tasks.terminate":
+      void terminateTask();
+      return null;
     case "workbench.action.files.save":
       if (useWorkspace.getState().activePath) await saveModel(useWorkspace.getState().activePath!);
       return null;
@@ -923,7 +959,10 @@ export function startExtensionHost() {
     }
     // Right away: extensions wait for the tab a command just opened (e.g. Claude Code's diffs).
     if (s.groups !== previous.groups || s.activeGroup !== previous.activeGroup) sendTabs(s);
-    if (s.root !== previous.root) scheduleSync();
+    if (s.root !== previous.root) {
+      demanded = false;
+      scheduleSync();
+    }
   });
   // Installing, updating or uninstalling an extension with code restarts the host.
   // Trusting the folder (or not) changes which extensions run.

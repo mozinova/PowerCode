@@ -1171,26 +1171,58 @@ export class TaskGroup {
   ) {}
 }
 
-export class ShellExecution {
-  constructor(
-    public commandLine: unknown,
-    public args?: unknown,
-    public options?: { cwd?: string; env?: Record<string, string> },
-  ) {}
+export enum ShellQuoting {
+  Escape = 1, Strong = 2, Weak = 3,
 }
 
+export interface ShellQuotedString {
+  value: string;
+  quoting: ShellQuoting;
+}
+
+type ExecutionOptions = { cwd?: string; env?: Record<string, string>; executable?: string; shellArgs?: string[] };
+
+/** `new ShellExecution(commandLine, options?)` or `new ShellExecution(command, args, options?)`. */
+export class ShellExecution {
+  commandLine?: string;
+  command?: string | ShellQuotedString;
+  args: (string | ShellQuotedString)[] = [];
+  options?: ExecutionOptions;
+  constructor(commandOrLine: string | ShellQuotedString, argsOrOptions?: (string | ShellQuotedString)[] | ExecutionOptions, options?: ExecutionOptions) {
+    if (Array.isArray(argsOrOptions)) {
+      this.command = commandOrLine;
+      this.args = argsOrOptions;
+      this.options = options;
+    } else {
+      this.commandLine = typeof commandOrLine === "string" ? commandOrLine : commandOrLine.value;
+      this.options = argsOrOptions;
+    }
+  }
+}
+
+/** `new ProcessExecution(process, options?)` or `new ProcessExecution(process, args, options?)`. */
 export class ProcessExecution {
+  args: string[] = [];
+  options?: ExecutionOptions;
   constructor(
     public process: string,
-    public args?: unknown,
-    public options?: { cwd?: string; env?: Record<string, string> },
-  ) {}
+    argsOrOptions?: string[] | ExecutionOptions,
+    options?: ExecutionOptions,
+  ) {
+    if (Array.isArray(argsOrOptions)) {
+      this.args = argsOrOptions;
+      this.options = options;
+    } else {
+      this.options = argsOrOptions;
+    }
+  }
 }
 
 export class CustomExecution {
   constructor(readonly callback: (resolvedDefinition: unknown) => PromiseLike<unknown>) {}
 }
 
+/** `new Task(definition, scope, name, source, execution?, problemMatchers?)`, or the older form without `scope`. */
 export class Task {
   group?: TaskGroup;
   presentationOptions: Record<string, unknown> = {};
@@ -1198,14 +1230,18 @@ export class Task {
   isBackground = false;
   detail?: string;
   problemMatchers: string[];
-  constructor(
-    public definition: { type: string; [key: string]: unknown },
-    public scope: unknown,
-    public name: string,
-    public source: string,
-    public execution?: ShellExecution | ProcessExecution | CustomExecution,
-    problemMatchers?: string | string[],
-  ) {
+  scope: unknown;
+  name: string;
+  source: string;
+  execution?: ShellExecution | ProcessExecution | CustomExecution;
+  constructor(public definition: { type: string; [key: string]: unknown }, ...rest: any[]) {
+    // The deprecated form has no scope: (definition, name, source, execution?, problemMatchers?).
+    if (typeof rest[0] === "string") rest.unshift(TaskScope.Workspace);
+    const [scope, name, source, execution, problemMatchers] = rest;
+    this.scope = scope;
+    this.name = name;
+    this.source = source;
+    this.execution = execution;
     this.problemMatchers = typeof problemMatchers === "string" ? [problemMatchers] : (problemMatchers ?? []);
   }
 }
