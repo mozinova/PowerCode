@@ -4,6 +4,7 @@
 use portable_pty::CommandBuilder;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -100,14 +101,29 @@ fn detect() -> Vec<TerminalProfile> {
         .collect()
 }
 
-#[tauri::command]
-pub fn terminal_profiles() -> Vec<TerminalProfile> {
-    detect()
+/// The last detection; detecting runs `wsl.exe`, which can take a while.
+static DETECTED: Mutex<Option<Vec<TerminalProfile>>> = Mutex::new(None);
+
+fn detect_and_cache() -> Vec<TerminalProfile> {
+    let profiles = detect();
+    if let Ok(mut cache) = DETECTED.lock() {
+        *cache = Some(profiles.clone());
+    }
+    profiles
 }
 
-/// The profile with `id`, or the first (default) one.
+/// Detects the profiles afresh (shells may have been installed since).
+#[tauri::command]
+pub async fn terminal_profiles() -> Result<Vec<TerminalProfile>, String> {
+    tauri::async_runtime::spawn_blocking(detect_and_cache)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The profile with `id`, or the first (default) one, from the last detection.
 pub fn resolve(id: Option<&str>) -> Option<TerminalProfile> {
-    let profiles = detect();
+    let cached = DETECTED.lock().ok().and_then(|c| c.clone());
+    let profiles = cached.unwrap_or_else(detect_and_cache);
     id.and_then(|id| profiles.iter().find(|p| p.id == id).cloned())
         .or_else(|| profiles.into_iter().next())
 }

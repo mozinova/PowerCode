@@ -161,7 +161,7 @@ fn read_installed(dir: &Path) -> Option<InstalledExtension> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn extensions_list(app: AppHandle) -> CmdResult<Vec<InstalledExtension>> {
     let mut installed: Vec<_> = std::fs::read_dir(extensions_dir(&app)?)
         .map_err(err)?
@@ -297,14 +297,14 @@ pub async fn extensions_install(
     .map_err(err)?
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn extensions_uninstall(app: AppHandle, id: String) -> CmdResult<()> {
     validate_segment(&id)?;
     std::fs::remove_dir_all(extensions_dir(&app)?.join(id)).map_err(err)
 }
 
 /// Reads a file contributed by an installed extension (grammar, theme, ...).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn extensions_read_file(app: AppHandle, id: String, relative: String) -> CmdResult<String> {
     validate_segment(&id)?;
     let base = extensions_dir(&app)?.join(&id).canonicalize().map_err(err)?;

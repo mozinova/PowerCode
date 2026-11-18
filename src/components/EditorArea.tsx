@@ -111,6 +111,9 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
       overviewRulerBorder: false,
       fixedOverflowWidgets: true,
+      // Extension grammars colour code through semantic tokens (see editor/textmate.ts).
+      // A global option: it also applies to the diff editors.
+      "semanticHighlighting.enabled": true,
     });
     editorRef.current = editor;
     const gutter = attachGitGutter(editor);

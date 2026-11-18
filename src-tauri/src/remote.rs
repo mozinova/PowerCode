@@ -364,7 +364,7 @@ fn valid_value(value: &str) -> bool {
 }
 
 /// Appends a `Host` entry to `~/.ssh/config`, so the host also works from any terminal.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remote_add_ssh_host(
     alias: String,
     host_name: String,
@@ -404,7 +404,7 @@ pub fn remote_add_ssh_host(
 
 /// Ends the host's SSH session; dropping it kills the `ssh` process. The next
 /// file operation on the host would connect again.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remote_disconnect(remotes: State<'_, Remotes>, host: String) -> CmdResult<()> {
     remotes.sessions.lock().map_err(err)?.remove(&host);
     Ok(())

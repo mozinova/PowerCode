@@ -78,7 +78,7 @@ fn take_utf8(pending: &mut Vec<u8>) -> String {
     String::from_utf8(text).unwrap_or_default()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn terminal_spawn(
     app: AppHandle,
     state: State<'_, Terminals>,
@@ -149,7 +149,7 @@ pub fn terminal_spawn(
     Ok(id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn terminal_write(state: State<'_, Terminals>, id: u32, data: String) -> CmdResult<()> {
     let mut sessions = state.sessions.lock().map_err(err)?;
     let session = sessions.get_mut(&id).ok_or("Terminal not found.")?;
@@ -157,7 +157,7 @@ pub fn terminal_write(state: State<'_, Terminals>, id: u32, data: String) -> Cmd
     session.writer.flush().map_err(err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn terminal_resize(state: State<'_, Terminals>, id: u32, cols: u16, rows: u16) -> CmdResult<()> {
     let sessions = state.sessions.lock().map_err(err)?;
     let session = sessions.get(&id).ok_or("Terminal not found.")?;
@@ -172,7 +172,7 @@ pub fn terminal_resize(state: State<'_, Terminals>, id: u32, cols: u16, rows: u1
         .map_err(err)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn terminal_kill(state: State<'_, Terminals>, id: u32) -> CmdResult<()> {
     if let Some(mut session) = state.sessions.lock().map_err(err)?.remove(&id) {
         let _ = session.killer.kill();
