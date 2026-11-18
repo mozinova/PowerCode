@@ -14,6 +14,7 @@ import * as rpc from "./rpc";
 import { host, lookup, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
 import * as types from "./types";
 import * as views from "./views";
+import { SURFACE, TOP_LEVEL, type MemberKind } from "./surface";
 import { createDebugApi } from "./debug";
 
 /** One debug namespace for all extensions: sessions and breakpoints are shared. */
@@ -642,13 +643,69 @@ const inertClasses = new Map<string, unknown>();
 function inertClass(name: string): unknown {
   let cls = inertClasses.get(name);
   if (!cls) {
-    rpc.notify("log", { level: "warning", message: `vscode.${name} is not supported yet` });
+    // Logged when an extension uses it (not when the API is built: most never are).
+    let warned = false;
+    const warn = () => {
+      if (warned) return;
+      warned = true;
+      rpc.notify("log", { level: "warning", message: `vscode.${name} is not supported yet` });
+    };
     cls = new Proxy(class {}, {
-      get: (target, key, receiver) => (key in target || typeof key === "symbol" ? Reflect.get(target, key, receiver) : inertObject()),
+      get: (target, key, receiver) => {
+        if (key in target || typeof key === "symbol") return Reflect.get(target, key, receiver);
+        warn();
+        return inertObject();
+      },
+      construct: (target, args, newTarget) => {
+        warn();
+        return Reflect.construct(target, args, newTarget);
+      },
     });
     inertClasses.set(name, cls);
   }
   return cls;
+}
+
+/**
+ * Adds the members of namespace `name` that PowerCode does not implement, by
+ * kind: events that never fire, `register*` functions returning a Disposable,
+ * functions returning a promise of `undefined`, empty lists. Calling one logs
+ * once, so the Extension Host output says what an extension missed.
+ */
+function completeNamespace(name: string, namespace: Record<string, unknown>, members: Record<string, MemberKind>) {
+  const warned = new Set<string>();
+  const warn = (member: string) => {
+    if (warned.has(member)) return;
+    warned.add(member);
+    rpc.notify("log", { level: "warning", message: `vscode.${name}.${member} is not supported yet` });
+  };
+  for (const [member, kind] of Object.entries(members)) {
+    if (member in namespace) continue;
+    let value: unknown;
+    switch (kind) {
+      case "event":
+        value = never();
+        break;
+      case "array":
+        value = [];
+        break;
+      case "property":
+        value = undefined;
+        break;
+      case "disposable":
+        value = () => (warn(member), new Disposable(() => {}));
+        break;
+      case "promise":
+        value = () => (warn(member), Promise.resolve(undefined));
+        break;
+      case "value":
+        // `create*` returns an object the extension goes on using: an inert one absorbs that.
+        value = () => (warn(member), member.startsWith("create") ? inertObject() : undefined);
+        break;
+    }
+    namespace[member] = value;
+  }
+  return namespace;
 }
 
 function formatL10n(message: string, args: unknown[]) {
@@ -963,17 +1020,26 @@ export function createApi(description: ExtensionDescription) {
       uri: undefined,
     },
 
-    // Later phases (debugging, tests, source control UI, ...).
     debug: debugApi,
-    tasks: stub("tasks"),
-    scm: stub("scm"),
-    comments: stub("comments"),
-    tests: stub("tests"),
-    notebooks: stub("notebooks"),
-    authentication: stub("authentication"),
-    chat: stub("chat"),
-    lm: stub("lm"),
+    // Not implemented yet: completed from the API's definition below.
+    tasks: {},
+    scm: {},
+    comments: {},
+    tests: {},
+    notebooks: {},
+    authentication: {},
+    chat: {},
+    lm: {},
   };
+
+  // Every member VS Code has exists, implemented or not (see completeNamespace).
+  for (const [name, members] of Object.entries(SURFACE)) {
+    api[name] = completeNamespace(name, (api[name] as Record<string, unknown>) ?? {}, members);
+  }
+  // So do its classes and enums: bundlers copy the module's own properties.
+  for (const name of TOP_LEVEL) {
+    if (!(name in api)) api[name] = inertClass(name);
+  }
 
   // Unknown members (newer API) get inert stand-ins rather than `undefined`.
   return new Proxy(api, {

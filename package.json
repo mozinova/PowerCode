@@ -10,7 +10,8 @@
     "tauri": "tauri",
     "build:exthost": "esbuild ext-host/src/host.ts --bundle --platform=node --target=node20 --format=cjs --outfile=src-tauri/resources/ext-host.cjs",
     "check:exthost": "tsc -p ext-host",
-    "prepare:exthost": "node scripts/fetch-node.mjs && bun run build:exthost"
+    "prepare:exthost": "node scripts/fetch-node.mjs && bun run build:exthost",
+    "gen:vscode-surface": "node scripts/gen-vscode-surface.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
@@ -38,6 +39,7 @@
     "@types/node": "^26.6.6",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
+    "@types/vscode": "^1.146.0",
     "@vitejs/plugin-react": "^6.0.2",
     "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.5",
