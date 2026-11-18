@@ -6,6 +6,7 @@ import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFold
 import { focusFindInFiles } from "./components/SearchView";
 import { focusSymbolSearch } from "./components/FileSearch";
 import { configureTasks, runTask, terminateTask } from "./exthost/tasks";
+import { manageAccounts } from "./exthost/accounts";
 import { saveModel } from "./editor/models";
 import { fetchAll, initRepository, pull, pushBranch } from "./git/actions";
 import { useGit } from "./git/store";
@@ -113,6 +114,7 @@ export const COMMANDS: Command[] = [
   { id: "tasks.build", category: "Tasks", label: "Run Build Task…", shortcut: "Ctrl+Shift+B", when: hasFolder, run: () => void runTask("build") },
   { id: "tasks.test", category: "Tasks", label: "Run Test Task…", when: hasFolder, run: () => void runTask("test") },
   { id: "tasks.terminate", category: "Tasks", label: "Terminate Task…", when: hasFolder, run: () => void terminateTask() },
+  { id: "accounts.manage", category: "Accounts", label: "Manage Accounts…", run: () => void manageAccounts() },
   { id: "tasks.configure", category: "Tasks", label: "Configure Tasks (tasks.json)", when: hasFolder, run: () => void configureTasks() },
   { id: "go.symbol", category: "Go", label: "Go to Symbol in Workspace…", shortcut: "Ctrl+T", when: hasFolder, run: () => focusSymbolSearch() },
   { id: "view.remote", category: "View", label: "Show Remote Hosts", run: () => showTool("remote") },

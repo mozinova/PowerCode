@@ -12,6 +12,7 @@ import * as providers from "./providers";
 import * as rpc from "./rpc";
 import * as views from "./views";
 import * as debug from "./debug";
+import * as authentication from "./authentication";
 import * as files from "./files";
 import * as tabs from "./tabs";
 import * as tasks from "./tasks";
@@ -88,11 +89,54 @@ function memento(file: string) {
   };
 }
 
+/** Secrets that could not be stored encrypted (no OS credential store): kept for this session only. */
+const memorySecrets = new Map<string, string>();
+let warnedAboutSecrets = false;
+
+/**
+ * An extension's `SecretStorage`: encrypted by the app on the local machine (also
+ * for a remote host), under the extension's id. Without an OS credential store,
+ * secrets are kept in memory, never written unencrypted.
+ */
+function secretsFor(extensionId: string) {
+  const full = (key: string) => `${extensionId}/${key}`;
+  const fallback = (e: unknown) => {
+    if (!warnedAboutSecrets) {
+      warnedAboutSecrets = true;
+      rpc.notify("log", { level: "warning", message: `Secrets are kept in memory only: ${e instanceof Error ? e.message : String(e)}` });
+    }
+  };
+  return {
+    async get(key: string): Promise<string | undefined> {
+      if (memorySecrets.has(full(key))) return memorySecrets.get(full(key));
+      try {
+        return (await rpc.request<string | null>("secrets/get", { key: full(key) })) ?? undefined;
+      } catch (e) {
+        fallback(e);
+        return undefined;
+      }
+    },
+    async store(key: string, value: string) {
+      try {
+        await rpc.request("secrets/set", { key: full(key), value });
+        memorySecrets.delete(full(key));
+      } catch (e) {
+        fallback(e);
+        memorySecrets.set(full(key), value);
+      }
+    },
+    async delete(key: string) {
+      memorySecrets.delete(full(key));
+      await rpc.request("secrets/delete", { key: full(key) }).catch(fallback);
+    },
+  };
+}
+
 function context(extension: ExtensionDescription, subscriptions: { dispose(): unknown }[]) {
   const globalStorage = path.join(host.globalStoragePath, extension.id);
   const workspaceStorage = path.join(host.storagePath, extension.id);
-  const secrets = new Map<string, string>();
   const secretChanges = new EventEmitter<{ key: string }>();
+  const secretStorage = secretsFor(extension.id);
   return {
     subscriptions,
     extensionPath: extension.path,
@@ -101,15 +145,14 @@ function context(extension: ExtensionDescription, subscriptions: { dispose(): un
     extension: (createApi(extension) as any).extensions.getExtension(extension.id),
     globalState: memento(path.join(globalStorage, "state.json")),
     workspaceState: memento(path.join(workspaceStorage, "state.json")),
-    // Kept in memory only for now: secrets are not written to disk unencrypted.
     secrets: {
-      get: async (key: string) => secrets.get(key),
+      get: (key: string) => secretStorage.get(key),
       store: async (key: string, value: string) => {
-        secrets.set(key, value);
+        await secretStorage.store(key, value);
         secretChanges.fire({ key });
       },
       delete: async (key: string) => {
-        secrets.delete(key);
+        await secretStorage.delete(key);
         secretChanges.fire({ key });
       },
       onDidChange: secretChanges.event,
@@ -253,6 +296,7 @@ function containsMatch(dir: string, globs: string[], depth: number): boolean {
 setCommandActivator(async (command) => activateByEvent(`onCommand:${command}`));
 debug.setDebugActivator(activateByEvent);
 tasks.setTaskActivator(activateByEvent);
+authentication.setAuthenticationActivator(activateByEvent);
 
 // ---- Messages from the UI ---------------------------------------------------
 
@@ -387,6 +431,7 @@ tabs.listen();
 files.listen();
 terminals.listen();
 tasks.listen();
+authentication.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

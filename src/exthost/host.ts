@@ -853,6 +853,16 @@ function registerHandlers() {
   });
 
   rpc.onRequest("tabs/close", closeHostTabs);
+  // Extensions' SecretStorage, encrypted on this machine (see src-tauri/src/secrets.rs).
+  rpc.onRequest("secrets/get", ({ key }) => invoke<string | null>("secrets_get", { key }));
+  rpc.onRequest("secrets/set", async ({ key, value }) => {
+    await invoke("secrets_set", { key, value });
+    return null;
+  });
+  rpc.onRequest("secrets/delete", async ({ key }) => {
+    await invoke("secrets_delete", { key });
+    return null;
+  });
   rpc.onRequest("workspace/applyEdit", applyWorkspaceEdit);
   rpc.onRequest("workspace/saveAll", saveAll);
   rpc.onRequest("documents/saveDocument", async ({ uri }) => {

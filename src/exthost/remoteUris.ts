@@ -90,4 +90,7 @@ export const UNTRANSLATED_METHODS = new Set([
   "configuration/changed",
   "statusBar/update",
   "statusBar/message",
+  "secrets/get",
+  "secrets/set",
+  "secrets/delete",
 ]);

@@ -9,6 +9,7 @@ mod profiles;
 mod remote;
 mod remote_exthost;
 mod search;
+mod secrets;
 mod system;
 mod terminal;
 mod wsl;
@@ -28,6 +29,7 @@ pub fn run() {
         .manage(exthost::ExtensionHost::default())
         .manage(webview::Webviews::default())
         .manage(cli::CliState::from_process())
+        .manage(secrets::Secrets::default())
         .setup(|app| {
             use tauri::Manager;
             if let Ok(data) = app.path().app_data_dir() {
@@ -87,6 +89,9 @@ pub fn run() {
             extensions::extensions_uninstall,
             extensions::extensions_read_file,
             cli::cli_take_pending,
+            secrets::secrets_get,
+            secrets::secrets_set,
+            secrets::secrets_delete,
             remote_exthost::remote_exthost_prepare,
             system::system_integration_status,
             system::system_install_command,

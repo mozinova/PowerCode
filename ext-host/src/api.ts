@@ -15,6 +15,7 @@ import { host, lookup, onDidChangeColorTheme, onDidChangeConfiguration, type Ext
 import * as types from "./types";
 import * as views from "./views";
 import * as decorations from "./decorations";
+import * as authentication from "./authentication";
 import * as files from "./files";
 import * as tabs from "./tabs";
 import * as tasks from "./tasks";
@@ -1124,7 +1125,13 @@ export function createApi(description: ExtensionDescription) {
     comments: {},
     tests: {},
     notebooks: {},
-    authentication: {},
+    authentication: {
+      registerAuthenticationProvider: authentication.registerAuthenticationProvider,
+      getSession: (providerId: string, scopes: readonly string[], options?: unknown) =>
+        authentication.getSession(extensionId, providerId, scopes, options),
+      getAccounts: authentication.getAccounts,
+      onDidChangeSessions: authentication.onDidChangeSessions.event,
+    },
     chat: {},
     lm: {},
   };
