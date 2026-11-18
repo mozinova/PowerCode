@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Generated: bundled Node (scripts/fetch-node.mjs) and the extension host bundle
+src-tauri/binaries/
+src-tauri/resources/ext-host.cjs

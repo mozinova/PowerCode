@@ -4,7 +4,7 @@ const SHOW_DELAY_MS = 500;
 const GAP = 6;
 const MARGIN = 4;
 
-export type TooltipSide = "bottom" | "right";
+export type TooltipSide = "bottom" | "right" | "left";
 
 /** Attributes that give any element an IntelliJ-style tooltip, shown by `TooltipLayer`. */
 export function tooltipProps(text: string | undefined, shortcut?: string, side: TooltipSide = "bottom") {
@@ -52,7 +52,7 @@ export function TooltipLayer() {
         setTip({
           text: el.dataset.tooltip,
           shortcut: el.dataset.tooltipShortcut || undefined,
-          side: el.dataset.tooltipSide === "right" ? "right" : "bottom",
+          side: el.dataset.tooltipSide === "right" || el.dataset.tooltipSide === "left" ? el.dataset.tooltipSide : "bottom",
           anchor: el.getBoundingClientRect(),
         });
       }, SHOW_DELAY_MS);
@@ -85,8 +85,8 @@ export function TooltipLayer() {
     const { anchor, side } = tip;
     let left: number;
     let top: number;
-    if (side === "right") {
-      left = anchor.right + GAP;
+    if (side === "right" || side === "left") {
+      left = side === "right" ? anchor.right + GAP : anchor.left - GAP - width;
       top = anchor.top + anchor.height / 2 - height / 2;
     } else {
       left = anchor.left + anchor.width / 2 - width / 2;

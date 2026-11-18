@@ -1,0 +1,975 @@
+//! The `vscode` module given to each extension: commands, window, workspace,
+//! languages, env, extensions, views and webviews (views.ts) and the API value
+//! types. Parts not implemented yet (debugging, SCM, ...) are inert stubs, so
+//! extensions that touch them still activate.
+
+import * as fs from "node:fs";
+import * as fsp from "node:fs/promises";
+import * as path from "node:path";
+import { documentFor, documents, onDidChange, onDidClose, onDidOpen, onDidSave, TextDocumentImpl } from "./documents";
+import * as dto from "./dto";
+import { matchesGlob } from "./glob";
+import * as providers from "./providers";
+import * as rpc from "./rpc";
+import { host, lookup, onDidChangeConfiguration, type ExtensionDescription } from "./state";
+import * as types from "./types";
+import * as views from "./views";
+import {
+  CancellationTokenSource,
+  Disposable,
+  EventEmitter,
+  FileType,
+  Position,
+  Range,
+  RelativePattern,
+  Selection,
+  StatusBarAlignment,
+  Uri,
+  WorkspaceEdit,
+} from "./types";
+
+export const VSCODE_VERSION = "1.95.0";
+
+// ---- Commands ---------------------------------------------------------------
+
+const commands = new Map<string, { callback: (...args: any[]) => unknown; thisArg?: unknown }>();
+
+/** Set by the host: activates extensions waiting for `onCommand:<id>`. */
+export let activateForCommand: (id: string) => Promise<void> = async () => {};
+export function setCommandActivator(fn: (id: string) => Promise<void>) {
+  activateForCommand = fn;
+}
+
+export async function executeCommand(id: string, ...args: unknown[]): Promise<unknown> {
+  if (!commands.has(id)) await activateForCommand(id);
+  const local = commands.get(id);
+  if (local) return local.callback.apply(local.thisArg, args);
+  // Not an extension command: PowerCode itself may know it (vscode.open, setContext, ...).
+  return rpc.request("commands/executeBuiltin", { command: id, args: args.map(serializeArg) });
+}
+
+/** Uris and ranges become JSON-friendly; other values pass as they are. */
+function serializeArg(arg: unknown): unknown {
+  if (Uri.isUri(arg)) return { $uri: arg.toString() };
+  if (arg instanceof Range) return dto.range(arg);
+  if (arg instanceof Position) return dto.position(arg);
+  return arg;
+}
+
+// ---- Diagnostics ------------------------------------------------------------
+
+const diagnosticsByOwner = new Map<string, Map<string, types.Diagnostic[]>>();
+const onDidChangeDiagnostics = new EventEmitter<{ uris: Uri[] }>();
+let nextCollection = 1;
+
+function diagnosticDto(d: types.Diagnostic) {
+  const code = typeof d.code === "object" && d.code !== null ? d.code.value : d.code;
+  return {
+    range: dto.range(d.range),
+    message: d.message,
+    severity: d.severity,
+    source: d.source,
+    code: code === undefined ? undefined : String(code),
+    tags: d.tags,
+  };
+}
+
+function createDiagnosticCollection(name = "diagnostics") {
+  const owner = `${name}#${nextCollection++}`;
+  const entries = new Map<string, types.Diagnostic[]>();
+  diagnosticsByOwner.set(owner, entries);
+  const publish = (uri: string) => {
+    rpc.notify("diagnostics/set", { owner, uri, diagnostics: (entries.get(uri) ?? []).map(diagnosticDto) });
+    onDidChangeDiagnostics.fire({ uris: [Uri.parse(uri)] });
+  };
+  const collection = {
+    name,
+    set(uriOrEntries: Uri | [Uri, types.Diagnostic[] | undefined][], diagnostics?: types.Diagnostic[]) {
+      if (Array.isArray(uriOrEntries)) {
+        for (const [uri, list] of uriOrEntries) {
+          entries.set(uri.toString(), list ?? []);
+          publish(uri.toString());
+        }
+      } else {
+        entries.set(uriOrEntries.toString(), [...(diagnostics ?? [])]);
+        publish(uriOrEntries.toString());
+      }
+    },
+    delete(uri: Uri) {
+      entries.delete(uri.toString());
+      publish(uri.toString());
+    },
+    clear() {
+      const uris = [...entries.keys()];
+      entries.clear();
+      uris.forEach(publish);
+    },
+    forEach(callback: (uri: Uri, diagnostics: types.Diagnostic[], collection: unknown) => void) {
+      for (const [uri, list] of entries) callback(Uri.parse(uri), list, collection);
+    },
+    get: (uri: Uri) => entries.get(uri.toString()),
+    has: (uri: Uri) => entries.has(uri.toString()),
+    dispose() {
+      collection.clear();
+      diagnosticsByOwner.delete(owner);
+    },
+    [Symbol.iterator]: function* () {
+      for (const [uri, list] of entries) yield [Uri.parse(uri), list];
+    },
+  };
+  return collection;
+}
+
+function getDiagnostics(uri?: Uri): any {
+  if (uri) return [...diagnosticsByOwner.values()].flatMap((entries) => entries.get(uri.toString()) ?? []);
+  const all = new Map<string, types.Diagnostic[]>();
+  for (const entries of diagnosticsByOwner.values()) {
+    for (const [key, list] of entries) all.set(key, [...(all.get(key) ?? []), ...list]);
+  }
+  return [...all].map(([key, list]) => [Uri.parse(key), list]);
+}
+
+// ---- Editors ----------------------------------------------------------------
+
+const onDidChangeActiveTextEditor = new EventEmitter<unknown>();
+const onDidChangeTextEditorSelection = new EventEmitter<unknown>();
+const onDidChangeVisibleTextEditors = new EventEmitter<unknown[]>();
+let activeEditor: ReturnType<typeof textEditor> | undefined;
+
+function textEditor(document: TextDocumentImpl, selections: Selection[]) {
+  const editor = {
+    document,
+    selections,
+    get selection() {
+      return editor.selections[0] ?? new Selection(new Position(0, 0), new Position(0, 0));
+    },
+    set selection(value: Selection) {
+      editor.selections = [value];
+      void rpc.request("editor/reveal", { uri: document.uri.toString(), range: dto.range(value), select: true });
+    },
+    visibleRanges: [] as Range[],
+    options: { tabSize: 4, insertSpaces: true },
+    viewColumn: 1,
+    async edit(callback: (builder: any) => void) {
+      const edits: { range: dto.RangeDto; newText: string }[] = [];
+      callback({
+        replace: (where: Range | Position, text: string) =>
+          edits.push({ range: dto.range(where instanceof Range ? where : new Range(where, where)), newText: text }),
+        insert: (at: Position, text: string) => edits.push({ range: dto.range(new Range(at, at)), newText: text }),
+        delete: (range: Range) => edits.push({ range: dto.range(range), newText: "" }),
+        setEndOfLine: () => {},
+      });
+      return rpc.request<boolean>("workspace/applyEdit", {
+        edits: [{ uri: document.uri.toString(), edits }],
+        operations: [],
+      });
+    },
+    insertSnippet(snippet: types.SnippetString, location?: Position | Range) {
+      const at = location instanceof Range ? location : location ? new Range(location, location) : editor.selection;
+      return rpc.request<boolean>("editor/insertSnippet", {
+        uri: document.uri.toString(),
+        range: dto.range(at),
+        snippet: snippet.value,
+      });
+    },
+    setDecorations() {},
+    revealRange(range: Range) {
+      void rpc.request("editor/reveal", { uri: document.uri.toString(), range: dto.range(range), select: false });
+    },
+    show() {},
+    hide() {},
+  };
+  return editor;
+}
+
+function setActiveEditor(params: { uri: string | null; selection?: dto.RangeDto } | null) {
+  const document = params?.uri ? documentFor(params.uri) : undefined;
+  const selection = params?.selection
+    ? new Selection(dto.toPosition(params.selection.start), dto.toPosition(params.selection.end))
+    : new Selection(new Position(0, 0), new Position(0, 0));
+  if (document && activeEditor?.document === document) {
+    activeEditor.selections = [selection];
+    onDidChangeTextEditorSelection.fire({ textEditor: activeEditor, selections: [selection], kind: undefined });
+    return;
+  }
+  activeEditor = document ? textEditor(document, [selection]) : undefined;
+  onDidChangeActiveTextEditor.fire(activeEditor);
+  onDidChangeVisibleTextEditors.fire(activeEditor ? [activeEditor] : []);
+}
+
+// ---- Window -----------------------------------------------------------------
+
+type MessageItem = string | { title: string; isCloseAffordance?: boolean };
+
+async function showMessage(severity: "info" | "warning" | "error", message: string, ...rest: any[]) {
+  const options = rest[0] && typeof rest[0] === "object" && !("title" in rest[0]) ? rest.shift() : {};
+  const items: MessageItem[] = rest.flat();
+  const index = await rpc.request<number | null>("window/showMessage", {
+    severity,
+    message,
+    detail: options.detail,
+    modal: options.modal ?? false,
+    items: items.map((i) => (typeof i === "string" ? i : i.title)),
+  });
+  return index === null || index === undefined ? undefined : items[index];
+}
+
+let nextOutput = 1;
+
+function createOutputChannel(name: string, options?: string | { log: true }) {
+  const id = `${name}#${nextOutput++}`;
+  rpc.notify("output/create", { id, name });
+  const log = (level: string) => (message: string, ...args: unknown[]) =>
+    rpc.notify("output/append", {
+      id,
+      text: `${new Date().toISOString()} [${level}] ${[message, ...args.map(String)].join(" ")}\n`,
+    });
+  return {
+    name,
+    logLevel: types.LogLevel.Info,
+    onDidChangeLogLevel: new EventEmitter<unknown>().event,
+    append: (text: string) => rpc.notify("output/append", { id, text }),
+    appendLine: (text: string) => rpc.notify("output/append", { id, text: `${text}\n` }),
+    replace: (text: string) => {
+      rpc.notify("output/clear", { id });
+      rpc.notify("output/append", { id, text });
+    },
+    clear: () => rpc.notify("output/clear", { id }),
+    show: () => rpc.notify("output/show", { id }),
+    hide: () => {},
+    dispose: () => rpc.notify("output/dispose", { id }),
+    trace: log("trace"),
+    debug: log("debug"),
+    info: log("info"),
+    warn: log("warning"),
+    error: (error: string | Error, ...args: unknown[]) => log("error")(error instanceof Error ? error.stack ?? error.message : error, ...args),
+    ...(typeof options === "object" && options.log ? {} : {}),
+  };
+}
+
+let nextStatusItem = 1;
+
+function createStatusBarItem(idOrAlignment?: string | StatusBarAlignment, alignmentOrPriority?: number, priority?: number) {
+  const [alignment, prio] =
+    typeof idOrAlignment === "string" ? [alignmentOrPriority, priority] : [idOrAlignment, alignmentOrPriority];
+  const id = `status#${nextStatusItem++}`;
+  let visible = false;
+  const state: Record<string, unknown> = {
+    text: "",
+    tooltip: undefined,
+    command: undefined,
+    name: undefined,
+    alignment: alignment ?? StatusBarAlignment.Left,
+    priority: prio ?? 0,
+  };
+  const update = () =>
+    rpc.notify("statusBar/update", {
+      id,
+      visible,
+      text: state.text,
+      tooltip: typeof state.tooltip === "object" && state.tooltip ? (state.tooltip as any).value : state.tooltip,
+      command:
+        typeof state.command === "string" ? { command: state.command } : dto.command(state.command as types.Command),
+      alignment: state.alignment,
+      priority: state.priority,
+    });
+  return new Proxy(
+    {
+      id,
+      show() {
+        visible = true;
+        update();
+      },
+      hide() {
+        visible = false;
+        update();
+      },
+      dispose() {
+        rpc.notify("statusBar/dispose", { id });
+      },
+    } as Record<string | symbol, any>,
+    {
+      get: (target, key) => (key in target ? target[key] : state[key as string]),
+      set: (_target, key, value) => {
+        state[key as string] = value;
+        if (visible) update();
+        return true;
+      },
+    },
+  );
+}
+
+async function showQuickPick(items: any, options: any = {}, _token?: unknown) {
+  const resolved: any[] = await items;
+  const labels = resolved.map((item) =>
+    typeof item === "string"
+      ? { label: item }
+      : { label: item.label, description: item.description, detail: item.detail, picked: item.picked, separator: item.kind === -1 },
+  );
+  const picked = await rpc.request<number[] | null>("window/showQuickPick", {
+    items: labels,
+    title: options.title,
+    placeHolder: options.placeHolder,
+    canPickMany: options.canPickMany ?? false,
+  });
+  if (!picked) return undefined;
+  options.onDidSelectItem?.(resolved[picked[0]]);
+  return options.canPickMany ? picked.map((i) => resolved[i]) : resolved[picked[0]];
+}
+
+async function showInputBox(options: any = {}) {
+  for (;;) {
+    const value = await rpc.request<string | null>("window/showInputBox", {
+      title: options.title,
+      prompt: options.prompt,
+      placeHolder: options.placeHolder,
+      value: options.value,
+      password: options.password ?? false,
+    });
+    if (value === null || value === undefined) return undefined;
+    // Validation runs here, so the box asks again until the value is accepted.
+    const problem = await options.validateInput?.(value);
+    const message = typeof problem === "object" && problem ? problem.message : problem;
+    if (!message) return value;
+    options = { ...options, value, prompt: message };
+  }
+}
+
+/**
+ * `createQuickPick` / `createInputBox` on top of the one-shot dialogs: `show()`
+ * opens the dialog with the current items and value; changing them while it
+ * is open takes effect the next time it is shown.
+ */
+function createQuickPick() {
+  const onDidAccept = new EventEmitter<void>();
+  const onDidHide = new EventEmitter<void>();
+  const onDidChangeSelection = new EventEmitter<any[]>();
+  const onDidChangeActive = new EventEmitter<any[]>();
+  const onDidChangeValue = new EventEmitter<string>();
+  const onDidTriggerButton = new EventEmitter<any>();
+  const quickPick: any = {
+    items: [] as any[],
+    selectedItems: [] as any[],
+    activeItems: [] as any[],
+    value: "",
+    title: undefined,
+    placeholder: undefined,
+    canSelectMany: false,
+    matchOnDescription: false,
+    matchOnDetail: false,
+    busy: false,
+    enabled: true,
+    ignoreFocusOut: false,
+    buttons: [],
+    onDidAccept: onDidAccept.event,
+    onDidHide: onDidHide.event,
+    onDidChangeSelection: onDidChangeSelection.event,
+    onDidChangeActive: onDidChangeActive.event,
+    onDidChangeValue: onDidChangeValue.event,
+    onDidTriggerButton: onDidTriggerButton.event,
+    onDidTriggerItemButton: new EventEmitter<any>().event,
+    async show() {
+      const items: any[] = quickPick.items;
+      const picked = await rpc.request<number[] | null>("window/showQuickPick", {
+        items: items.map((item) => ({ label: item.label, description: item.description, detail: item.detail, picked: item.picked, separator: item.kind === -1 })),
+        title: quickPick.title,
+        placeHolder: quickPick.placeholder,
+        canPickMany: quickPick.canSelectMany,
+      }).catch(() => null);
+      if (picked) {
+        quickPick.selectedItems = picked.map((i) => items[i]);
+        quickPick.activeItems = quickPick.selectedItems;
+        onDidChangeActive.fire(quickPick.activeItems);
+        onDidChangeSelection.fire(quickPick.selectedItems);
+        onDidAccept.fire();
+      }
+      onDidHide.fire();
+    },
+    hide() {},
+    dispose() {},
+  };
+  return quickPick;
+}
+
+function createInputBox() {
+  const onDidAccept = new EventEmitter<void>();
+  const onDidHide = new EventEmitter<void>();
+  const onDidChangeValue = new EventEmitter<string>();
+  const inputBox: any = {
+    value: "",
+    title: undefined,
+    prompt: undefined,
+    placeholder: undefined,
+    password: false,
+    busy: false,
+    enabled: true,
+    ignoreFocusOut: false,
+    validationMessage: undefined,
+    buttons: [],
+    onDidAccept: onDidAccept.event,
+    onDidHide: onDidHide.event,
+    onDidChangeValue: onDidChangeValue.event,
+    onDidTriggerButton: new EventEmitter<any>().event,
+    async show() {
+      const value = await rpc.request<string | null>("window/showInputBox", {
+        title: inputBox.title,
+        prompt: inputBox.validationMessage ?? inputBox.prompt,
+        placeHolder: inputBox.placeholder,
+        value: inputBox.value,
+        password: inputBox.password,
+      }).catch(() => null);
+      if (value !== null && value !== undefined) {
+        inputBox.value = value;
+        onDidChangeValue.fire(value);
+        onDidAccept.fire();
+      }
+      onDidHide.fire();
+    },
+    hide() {},
+    dispose() {},
+  };
+  return inputBox;
+}
+
+let nextProgress = 1;
+
+async function withProgress(options: { title?: string; location: number; cancellable?: boolean }, task: (progress: any, token: any) => Promise<unknown>) {
+  const id = nextProgress++;
+  rpc.notify("progress/start", { id, title: options.title ?? "" });
+  const source = new CancellationTokenSource();
+  try {
+    return await task({ report: (value: { message?: string }) => rpc.notify("progress/report", { id, message: value.message }) }, source.token);
+  } finally {
+    rpc.notify("progress/end", { id });
+  }
+}
+
+async function showTextDocument(target: TextDocumentImpl | Uri, options?: { selection?: Range; preview?: boolean }) {
+  const uri = target instanceof TextDocumentImpl ? target.uri : target;
+  await rpc.request("window/showTextDocument", {
+    uri: uri.toString(),
+    selection: options?.selection ? dto.range(options.selection) : undefined,
+  });
+  const document = documentFor(uri) ?? (await openTextDocument(uri));
+  return activeEditor?.document === document ? activeEditor : textEditor(document, [new Selection(new Position(0, 0), new Position(0, 0))]);
+}
+
+// ---- Workspace --------------------------------------------------------------
+
+async function openTextDocument(target?: Uri | string | { language?: string; content?: string }) {
+  if (target === undefined || (typeof target === "object" && !Uri.isUri(target))) {
+    const untitled = Uri.from({ scheme: "untitled", path: `Untitled-${documents.size + 1}` });
+    const document = new TextDocumentImpl(untitled, (target as any)?.language ?? "plaintext", 1, (target as any)?.content ?? "");
+    documents.set(untitled.toString(), document);
+    return document;
+  }
+  const uri = typeof target === "string" ? Uri.file(target) : target;
+  const existing = documentFor(uri);
+  if (existing) return existing;
+  const text = await fsp.readFile(uri.fsPath, "utf8");
+  const languageId = await rpc.request<string>("languages/detect", { uri: uri.toString() }).catch(() => "plaintext");
+  const document = new TextDocumentImpl(uri, languageId ?? "plaintext", 1, text);
+  documents.set(uri.toString(), document);
+  onDidOpen.fire(document);
+  return document;
+}
+
+function getConfiguration(section?: string, _scope?: unknown) {
+  const full = (key: string) => (section ? `${section}.${key}` : key);
+  const configuration = {
+    get<T>(key: string, defaultValue?: T): T | undefined {
+      const value = lookup(full(key));
+      return (value === undefined ? defaultValue : value) as T | undefined;
+    },
+    has: (key: string) => lookup(full(key)) !== undefined,
+    inspect: (key: string) => ({
+      key: full(key),
+      defaultValue: host.defaults[full(key)],
+      globalValue: host.settings[full(key)],
+    }),
+    update: (key: string, value: unknown) => rpc.request("configuration/update", { key: full(key), value }),
+  };
+  // Settings can also be read as properties: `getConfiguration("editor").tabSize`.
+  return new Proxy(configuration, {
+    get: (target, key) =>
+      key in target || typeof key === "symbol" ? (target as any)[key] : lookup(full(String(key))),
+  });
+}
+
+const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git"]);
+
+async function findFiles(include: string | RelativePattern, exclude?: string | RelativePattern | null, maxResults?: number) {
+  const [base, pattern] =
+    include instanceof RelativePattern ? [include.baseUri.fsPath, include.pattern] : [host.workspaceFolders[0]?.uri.fsPath, include];
+  if (!base) return [];
+  const excludePattern = exclude instanceof RelativePattern ? exclude.pattern : exclude ?? undefined;
+  const results: Uri[] = [];
+  const walk = async (dir: string) => {
+    if (maxResults !== undefined && results.length >= maxResults) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      const relative = path.relative(base, full).replace(/\\/g, "/");
+      if (entry.isDirectory()) {
+        if (!SKIPPED_DIRECTORIES.has(entry.name)) await walk(full);
+      } else if (matchesGlob(relative, pattern) && !(excludePattern && matchesGlob(relative, excludePattern))) {
+        results.push(Uri.file(full));
+        if (maxResults !== undefined && results.length >= maxResults) return;
+      }
+    }
+  };
+  await walk(base);
+  return results;
+}
+
+function createFileSystemWatcher(pattern: string | RelativePattern, ignoreCreate = false, ignoreChange = false, ignoreDelete = false) {
+  const [base, glob] =
+    pattern instanceof RelativePattern ? [pattern.baseUri.fsPath, pattern.pattern] : [host.workspaceFolders[0]?.uri.fsPath, pattern];
+  const created = new EventEmitter<Uri>();
+  const changed = new EventEmitter<Uri>();
+  const deleted = new EventEmitter<Uri>();
+  let watcher: fs.FSWatcher | undefined;
+  if (base) {
+    try {
+      watcher = fs.watch(base, { recursive: true }, (_event, filename) => {
+        if (!filename) return;
+        const relative = filename.toString().replace(/\\/g, "/");
+        if (relative.split("/").some((part) => SKIPPED_DIRECTORIES.has(part)) || !matchesGlob(relative, glob)) return;
+        const full = path.join(base, relative);
+        const uri = Uri.file(full);
+        fs.stat(full, (error) => {
+          if (error) !ignoreDelete && deleted.fire(uri);
+          else if (_event === "rename") !ignoreCreate && created.fire(uri);
+          else !ignoreChange && changed.fire(uri);
+        });
+      });
+    } catch {
+      // Watching is best effort (e.g. on file systems without recursive watching).
+    }
+  }
+  return {
+    ignoreCreateEvents: ignoreCreate,
+    ignoreChangeEvents: ignoreChange,
+    ignoreDeleteEvents: ignoreDelete,
+    onDidCreate: created.event,
+    onDidChange: changed.event,
+    onDidDelete: deleted.event,
+    dispose: () => watcher?.close(),
+  };
+}
+
+const workspaceFs = {
+  async stat(uri: Uri) {
+    const s = await fsp.stat(uri.fsPath);
+    return {
+      type: s.isDirectory() ? FileType.Directory : s.isFile() ? FileType.File : FileType.Unknown,
+      ctime: s.ctimeMs,
+      mtime: s.mtimeMs,
+      size: s.size,
+    };
+  },
+  async readDirectory(uri: Uri) {
+    const entries = await fsp.readdir(uri.fsPath, { withFileTypes: true });
+    return entries.map((e) => [e.name, e.isDirectory() ? FileType.Directory : FileType.File]);
+  },
+  readFile: async (uri: Uri) => new Uint8Array(await fsp.readFile(uri.fsPath)),
+  writeFile: (uri: Uri, content: Uint8Array) => fsp.writeFile(uri.fsPath, content),
+  createDirectory: (uri: Uri) => fsp.mkdir(uri.fsPath, { recursive: true }).then(() => undefined),
+  delete: (uri: Uri, options?: { recursive?: boolean }) => fsp.rm(uri.fsPath, { recursive: options?.recursive ?? false, force: false }),
+  rename: (from: Uri, to: Uri) => fsp.rename(from.fsPath, to.fsPath),
+  copy: (from: Uri, to: Uri) => fsp.cp(from.fsPath, to.fsPath, { recursive: true }),
+  isWritableFileSystem: (scheme: string) => scheme === "file",
+};
+
+// ---- Misc helpers -------------------------------------------------------------
+
+/** An event that never fires, for API parts PowerCode does not produce. */
+const never = () => new EventEmitter<any>().event;
+
+/** Inert stand-ins for namespaces not implemented yet; each logs once when first used. */
+function stub(name: string): any {
+  const warned = new Set<string>();
+  return new Proxy(
+    {},
+    {
+      get: (_target, key) => {
+        if (typeof key === "symbol") return undefined;
+        if (key.startsWith("onDid") || key.startsWith("onWill")) return never();
+        return (..._args: unknown[]) => {
+          if (!warned.has(key)) {
+            warned.add(key);
+            rpc.notify("log", { level: "warning", message: `vscode.${name}.${key} is not supported yet` });
+          }
+          return inertObject();
+        };
+      },
+    },
+  );
+}
+
+/** An object that absorbs any use: properties are no-op functions or events, and dispose works. */
+function inertObject(): any {
+  return new Proxy(() => {}, {
+    get: (_target, key) => {
+      if (key === "then") return undefined;
+      if (typeof key === "string" && (key.startsWith("onDid") || key.startsWith("onWill"))) return never();
+      return inertObject();
+    },
+    apply: () => inertObject(),
+  });
+}
+
+/**
+ * A stand-in for an API class PowerCode lacks: it can be constructed and
+ * extended, and its static members (`Foo.create(...)`, `Foo.Default`) are inert
+ * instead of undefined, so module-level uses do not throw.
+ */
+const inertClasses = new Map<string, unknown>();
+function inertClass(name: string): unknown {
+  let cls = inertClasses.get(name);
+  if (!cls) {
+    rpc.notify("log", { level: "warning", message: `vscode.${name} is not supported yet` });
+    cls = new Proxy(class {}, {
+      get: (target, key, receiver) => (key in target || typeof key === "symbol" ? Reflect.get(target, key, receiver) : inertObject()),
+    });
+    inertClasses.set(name, cls);
+  }
+  return cls;
+}
+
+function formatL10n(message: string, args: unknown[]) {
+  const named = args.length === 1 && typeof args[0] === "object" && args[0] !== null ? (args[0] as Record<string, unknown>) : null;
+  return message.replace(/\{(\w+)\}/g, (match, key) =>
+    named ? String(named[key] ?? match) : String(args[Number(key)] ?? match),
+  );
+}
+
+function extensionObject(description: ExtensionDescription, state: { exports?: unknown; active: boolean }) {
+  return {
+    id: `${description.manifest.publisher}.${description.manifest.name}`,
+    extensionUri: Uri.file(description.path),
+    extensionPath: description.path,
+    packageJSON: description.manifest,
+    extensionKind: types.ExtensionKind.Workspace,
+    get isActive() {
+      return state.active;
+    },
+    get exports() {
+      return state.exports;
+    },
+    activate: () => Promise.resolve(state.exports),
+  };
+}
+
+/** Activation state of every extension, shared with the host's activation logic. */
+export const extensionStates = new Map<string, { exports?: unknown; active: boolean; activate?: Promise<void> }>();
+
+/** Builds the `vscode` module for one extension. */
+export function createApi(description: ExtensionDescription) {
+  const extensionId = description.id;
+  const api: Record<string, unknown> = {
+    ...types,
+    version: VSCODE_VERSION,
+
+    commands: {
+      registerCommand(id: string, callback: (...args: any[]) => unknown, thisArg?: unknown) {
+        commands.set(id, { callback, thisArg });
+        return new Disposable(() => commands.delete(id));
+      },
+      registerTextEditorCommand(id: string, callback: (editor: unknown, edit: unknown, ...args: any[]) => unknown, thisArg?: unknown) {
+        commands.set(id, {
+          callback: (...args: any[]) => activeEditor && activeEditor.edit((edit: unknown) => callback.call(thisArg, activeEditor, edit, ...args)),
+        });
+        return new Disposable(() => commands.delete(id));
+      },
+      executeCommand,
+      getCommands: async () => [...commands.keys()],
+    },
+
+    window: {
+      get activeTextEditor() {
+        return activeEditor;
+      },
+      get visibleTextEditors() {
+        return activeEditor ? [activeEditor] : [];
+      },
+      get terminals() {
+        return [];
+      },
+      activeColorTheme: { kind: 2 },
+      state: { focused: true, active: true },
+      tabGroups: { all: [], activeTabGroup: { tabs: [] }, onDidChangeTabs: never(), onDidChangeTabGroups: never() },
+      onDidChangeActiveTextEditor: onDidChangeActiveTextEditor.event,
+      onDidChangeVisibleTextEditors: onDidChangeVisibleTextEditors.event,
+      onDidChangeTextEditorSelection: onDidChangeTextEditorSelection.event,
+      onDidChangeTextEditorVisibleRanges: never(),
+      onDidChangeTextEditorOptions: never(),
+      onDidChangeWindowState: never(),
+      onDidChangeActiveColorTheme: never(),
+      onDidOpenTerminal: never(),
+      onDidCloseTerminal: never(),
+      onDidChangeActiveTerminal: never(),
+      showInformationMessage: (message: string, ...rest: any[]) => showMessage("info", message, ...rest),
+      showWarningMessage: (message: string, ...rest: any[]) => showMessage("warning", message, ...rest),
+      showErrorMessage: (message: string, ...rest: any[]) => showMessage("error", message, ...rest),
+      showQuickPick,
+      showInputBox,
+      createOutputChannel,
+      createStatusBarItem,
+      setStatusBarMessage(text: string, hideAfter?: number | PromiseLike<unknown>) {
+        rpc.notify("statusBar/message", { text });
+        const clear = () => rpc.notify("statusBar/message", { text: "" });
+        if (typeof hideAfter === "number") setTimeout(clear, hideAfter);
+        else hideAfter?.then(clear, clear);
+        return new Disposable(clear);
+      },
+      withProgress,
+      showTextDocument,
+      async showOpenDialog(options: any = {}) {
+        const paths = await rpc.request<string[] | null>("window/showOpenDialog", {
+          canSelectFolders: options.canSelectFolders ?? false,
+          canSelectMany: options.canSelectMany ?? false,
+          title: options.title,
+        });
+        return paths?.map((p) => Uri.file(p));
+      },
+      async showSaveDialog(options: any = {}) {
+        const file = await rpc.request<string | null>("window/showSaveDialog", { title: options.title });
+        return file ? Uri.file(file) : undefined;
+      },
+      showWorkspaceFolderPick: async () => host.workspaceFolders[0],
+      createTerminal(nameOrOptions?: string | { name?: string; cwd?: string | Uri }) {
+        const options = typeof nameOrOptions === "string" ? { name: nameOrOptions } : nameOrOptions ?? {};
+        const id = `terminal#${nextOutput++}`;
+        const cwd = options.cwd ? (typeof options.cwd === "string" ? options.cwd : options.cwd.fsPath) : undefined;
+        rpc.notify("terminal/create", { id, name: options.name, cwd });
+        return {
+          name: options.name ?? "Terminal",
+          processId: Promise.resolve(undefined),
+          sendText: (text: string, addNewLine = true) => rpc.notify("terminal/sendText", { id, text: addNewLine ? `${text}\r` : text }),
+          show: () => rpc.notify("terminal/show", { id }),
+          hide: () => {},
+          dispose: () => rpc.notify("terminal/dispose", { id }),
+        };
+      },
+      createTextEditorDecorationType: () => ({ key: `decoration#${nextOutput++}`, dispose() {} }),
+      registerUriHandler: () => new Disposable(() => {}),
+      registerTreeDataProvider(viewId: string, treeDataProvider: unknown) {
+        const view = views.registerTree(viewId, { treeDataProvider });
+        return new Disposable(() => view.dispose());
+      },
+      createTreeView: (viewId: string, options: unknown) => views.registerTree(viewId, options),
+      registerWebviewViewProvider: (viewId: string, provider: unknown, options?: unknown) =>
+        views.registerWebviewViewProvider(extensionId, viewId, provider, options),
+      createWebviewPanel: (viewType: string, title: string, showOptions: unknown, options?: unknown) =>
+        views.createWebviewPanel(extensionId, viewType, title, showOptions, options),
+      registerWebviewPanelSerializer: () => new Disposable(() => {}),
+      registerCustomEditorProvider: (..._args: unknown[]) => stub("window").registerCustomEditorProvider(),
+      registerFileDecorationProvider: () => new Disposable(() => {}),
+      registerTerminalLinkProvider: () => new Disposable(() => {}),
+      registerTerminalProfileProvider: () => new Disposable(() => {}),
+      createQuickPick,
+      createInputBox,
+    },
+
+    workspace: {
+      get workspaceFolders() {
+        return host.workspaceFolders.length ? host.workspaceFolders : undefined;
+      },
+      get name() {
+        return host.workspaceFolders[0]?.name;
+      },
+      get rootPath() {
+        return host.workspaceFolders[0]?.uri.fsPath;
+      },
+      workspaceFile: undefined,
+      isTrusted: true,
+      get textDocuments() {
+        return [...documents.values()].filter((d) => !d.isClosed);
+      },
+      notebookDocuments: [],
+      getWorkspaceFolder: (uri: Uri) =>
+        host.workspaceFolders.find((f) => uri.fsPath.toLowerCase().startsWith(f.uri.fsPath.toLowerCase())),
+      asRelativePath(pathOrUri: string | Uri) {
+        const full = typeof pathOrUri === "string" ? pathOrUri : pathOrUri.fsPath;
+        const root = host.workspaceFolders[0]?.uri.fsPath;
+        return root && full.toLowerCase().startsWith(root.toLowerCase())
+          ? path.relative(root, full).replace(/\\/g, "/")
+          : full;
+      },
+      getConfiguration,
+      openTextDocument,
+      findFiles,
+      createFileSystemWatcher,
+      fs: workspaceFs,
+      async applyEdit(edit: WorkspaceEdit) {
+        return rpc.request<boolean>("workspace/applyEdit", dto.workspaceEdit(edit));
+      },
+      saveAll: () => rpc.request<boolean>("workspace/saveAll", {}),
+      updateWorkspaceFolders: () => false,
+      registerTextDocumentContentProvider: () => new Disposable(() => {}),
+      registerFileSystemProvider: () => new Disposable(() => {}),
+      registerTaskProvider: () => new Disposable(() => {}),
+      onDidOpenTextDocument: onDidOpen.event,
+      onDidCloseTextDocument: onDidClose.event,
+      onDidChangeTextDocument: onDidChange.event,
+      onDidSaveTextDocument: onDidSave.event,
+      onWillSaveTextDocument: never(),
+      onDidChangeConfiguration: onDidChangeConfiguration.event,
+      onDidChangeWorkspaceFolders: never(),
+      onDidCreateFiles: never(),
+      onDidDeleteFiles: never(),
+      onDidRenameFiles: never(),
+      onWillCreateFiles: never(),
+      onWillDeleteFiles: never(),
+      onWillRenameFiles: never(),
+      onDidGrantWorkspaceTrust: never(),
+      onDidOpenNotebookDocument: never(),
+      onDidCloseNotebookDocument: never(),
+      onDidChangeNotebookDocument: never(),
+    },
+
+    languages: {
+      getLanguages: async () => host.languages,
+      match: providers.match,
+      createDiagnosticCollection,
+      getDiagnostics,
+      onDidChangeDiagnostics: onDidChangeDiagnostics.event,
+      setTextDocumentLanguage: async (document: TextDocumentImpl, languageId: string) => {
+        document.languageId = languageId;
+        return document;
+      },
+      setLanguageConfiguration(language: string, configuration: any) {
+        const regex = (r?: RegExp) => (r ? { source: r.source, flags: r.flags } : undefined);
+        rpc.notify("languages/configuration", {
+          language,
+          configuration: {
+            comments: configuration.comments,
+            brackets: configuration.brackets,
+            wordPattern: regex(configuration.wordPattern),
+            indentationRules: configuration.indentationRules && {
+              increaseIndentPattern: regex(configuration.indentationRules.increaseIndentPattern),
+              decreaseIndentPattern: regex(configuration.indentationRules.decreaseIndentPattern),
+            },
+          },
+        });
+        return new Disposable(() => {});
+      },
+      registerCompletionItemProvider: (selector: providers.DocumentSelector, provider: unknown, ...triggerCharacters: string[]) =>
+        providers.register("completion", extensionId, selector, provider, { triggerCharacters }),
+      registerHoverProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("hover", extensionId, s, p),
+      registerDefinitionProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("definition", extensionId, s, p),
+      registerDeclarationProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("declaration", extensionId, s, p),
+      registerTypeDefinitionProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("typeDefinition", extensionId, s, p),
+      registerImplementationProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("implementation", extensionId, s, p),
+      registerReferenceProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("references", extensionId, s, p),
+      registerDocumentHighlightProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("documentHighlight", extensionId, s, p),
+      registerDocumentSymbolProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("documentSymbol", extensionId, s, p),
+      registerDocumentFormattingEditProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("formatting", extensionId, s, p),
+      registerDocumentRangeFormattingEditProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("rangeFormatting", extensionId, s, p),
+      registerOnTypeFormattingEditProvider: (s: providers.DocumentSelector, p: unknown, first: string, ...more: string[]) =>
+        providers.register("onTypeFormatting", extensionId, s, p, { triggerCharacters: [first, ...more] }),
+      registerCodeActionsProvider: (s: providers.DocumentSelector, p: unknown, metadata?: { providedCodeActionKinds?: { value: string }[] }) =>
+        providers.register("codeActions", extensionId, s, p, { kinds: metadata?.providedCodeActionKinds?.map((k) => k.value) }),
+      registerCodeLensProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("codeLens", extensionId, s, p),
+      registerSignatureHelpProvider: (s: providers.DocumentSelector, p: unknown, first?: string | { triggerCharacters: string[]; retriggerCharacters?: string[] }, ...more: string[]) =>
+        providers.register("signatureHelp", extensionId, s, p,
+          typeof first === "object" ? first : { triggerCharacters: first ? [first, ...more] : [], retriggerCharacters: [] }),
+      registerRenameProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("rename", extensionId, s, p),
+      registerFoldingRangeProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("foldingRanges", extensionId, s, p),
+      registerDocumentLinkProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("documentLinks", extensionId, s, p),
+      registerInlayHintsProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("inlayHints", extensionId, s, p),
+      // Not bridged yet: accepted so extensions keep working.
+      registerDocumentSemanticTokensProvider: () => new Disposable(() => {}),
+      registerDocumentRangeSemanticTokensProvider: () => new Disposable(() => {}),
+      registerColorProvider: () => new Disposable(() => {}),
+      registerSelectionRangeProvider: () => new Disposable(() => {}),
+      registerCallHierarchyProvider: () => new Disposable(() => {}),
+      registerTypeHierarchyProvider: () => new Disposable(() => {}),
+      registerLinkedEditingRangeProvider: () => new Disposable(() => {}),
+      registerInlineCompletionItemProvider: () => new Disposable(() => {}),
+      registerWorkspaceSymbolProvider: () => new Disposable(() => {}),
+      registerEvaluatableExpressionProvider: () => new Disposable(() => {}),
+      registerInlineValuesProvider: () => new Disposable(() => {}),
+      registerDocumentDropEditProvider: () => new Disposable(() => {}),
+      registerDocumentPasteEditProvider: () => new Disposable(() => {}),
+      createLanguageStatusItem: (id: string) => ({ id, text: "", severity: 0, dispose() {} }),
+    },
+
+    env: {
+      appName: "PowerCode",
+      appRoot: host.appRoot,
+      appHost: "desktop",
+      language: "en",
+      machineId: "powercode",
+      sessionId: `${Date.now()}`,
+      uriScheme: "powercode",
+      shell: process.env.SHELL ?? process.env.ComSpec ?? "",
+      uiKind: types.UIKind.Desktop,
+      remoteName: undefined,
+      isNewAppInstall: false,
+      isTelemetryEnabled: false,
+      onDidChangeTelemetryEnabled: never(),
+      onDidChangeShell: never(),
+      logLevel: types.LogLevel.Info,
+      onDidChangeLogLevel: never(),
+      clipboard: {
+        readText: () => rpc.request<string>("env/clipboardRead", {}),
+        writeText: (text: string) => rpc.request("env/clipboardWrite", { text }).then(() => undefined),
+      },
+      openExternal: (uri: Uri) => rpc.request<boolean>("env/openExternal", { uri: uri.toString() }),
+      asExternalUri: async (uri: Uri) => uri,
+      createTelemetryLogger: () => inertObject(),
+    },
+
+    extensions: {
+      getExtension(id: string) {
+        const description = host.extensions.find((e) => e.id === id.toLowerCase());
+        if (!description) return undefined;
+        let state = extensionStates.get(description.id);
+        if (!state) {
+          state = { active: false };
+          extensionStates.set(description.id, state);
+        }
+        return extensionObject(description, state);
+      },
+      get all() {
+        return host.extensions.map((e) => (api.extensions as any).getExtension(e.id));
+      },
+      onDidChange: never(),
+    },
+
+    l10n: {
+      t: (message: string | { message: string; args?: unknown[] }, ...args: unknown[]) =>
+        typeof message === "string" ? formatL10n(message, args) : formatL10n(message.message, message.args ?? []),
+      bundle: undefined,
+      uri: undefined,
+    },
+
+    // Later phases (debugging, tests, source control UI, ...).
+    debug: stub("debug"),
+    tasks: stub("tasks"),
+    scm: stub("scm"),
+    comments: stub("comments"),
+    tests: stub("tests"),
+    notebooks: stub("notebooks"),
+    authentication: stub("authentication"),
+    chat: stub("chat"),
+    lm: stub("lm"),
+  };
+
+  // Unknown members (newer API) get inert stand-ins rather than `undefined`.
+  return new Proxy(api, {
+    get: (target, key) => {
+      if (key in target || typeof key === "symbol") return (target as any)[key];
+      return /^[A-Z]/.test(key) ? inertClass(key) : stub(key);
+    },
+  });
+}
+
+export const hostEvents = { setActiveEditor };

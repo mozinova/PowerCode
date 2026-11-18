@@ -97,6 +97,62 @@ pub async fn openvsx_search(query: String) -> CmdResult<Vec<SearchEntry>> {
 const MAX_README_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LatestVersion {
+    version: String,
+    /// The installed package is for another platform than this one (e.g. installed
+    /// before PowerCode picked platform-specific packages): it needs reinstalling.
+    wrong_platform: bool,
+}
+
+/// The platform of an installed extension's package: from the install info, else
+/// what Open VSX served by default (what PowerCode installed before recording it).
+fn installed_platform(app: &AppHandle, id: &str, metadata: &ExtensionMetadata) -> String {
+    let recorded = extensions_dir(app)
+        .ok()
+        .and_then(|dir| std::fs::read_to_string(dir.join(id.to_lowercase()).join(INSTALL_INFO)).ok())
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+        .and_then(|info| info.get("targetPlatform")?.as_str().map(str::to_string));
+    recorded.unwrap_or_else(|| metadata.target_platform.clone().unwrap_or_else(|| "universal".to_string()))
+}
+
+/// Latest published version of each installed `namespace.name` id, queried in parallel.
+/// Extensions Open VSX does not know (or that fail to load) are left out.
+#[tauri::command]
+pub async fn openvsx_latest_versions(
+    app: AppHandle,
+    ids: Vec<String>,
+) -> CmdResult<std::collections::HashMap<String, LatestVersion>> {
+    let lookups: Vec<_> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let (namespace, name) = id.split_once('.')?;
+            if validate_segment(namespace).is_err() || validate_segment(name).is_err() {
+                return None;
+            }
+            let url = format!("{OPEN_VSX_API}/{namespace}/{name}");
+            let app = app.clone();
+            Some(tauri::async_runtime::spawn(async move {
+                let response = http().get(url).send().await.ok()?.error_for_status().ok()?;
+                let metadata: ExtensionMetadata = response.json().await.ok()?;
+                let wrong_platform = match choose_download(&metadata, current_target_platform()) {
+                    Ok((_, platform)) => platform != installed_platform(&app, &id, &metadata),
+                    Err(_) => false,
+                };
+                Some((id, LatestVersion { version: metadata.version.clone(), wrong_platform }))
+            }))
+        })
+        .collect();
+    let mut versions = std::collections::HashMap::new();
+    for lookup in lookups {
+        if let Ok(Some((id, latest))) = lookup.await {
+            versions.insert(id, latest);
+        }
+    }
+    Ok(versions)
+}
+
+#[derive(Serialize)]
 pub struct ExtensionDetails {
     /// Open VSX metadata, passed through as-is.
     metadata: serde_json::Value,
@@ -174,9 +230,63 @@ pub fn extensions_list(app: AppHandle) -> CmdResult<Vec<InstalledExtension>> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ExtensionMetadata {
+    #[serde(default)]
+    version: String,
     files: SearchFiles,
+    /// Platform of `files.download`; `universal` (or absent) when not platform-specific.
+    #[serde(default)]
+    target_platform: Option<String>,
+    /// Packages per platform (`win32-x64`, `linux-arm64`, ...) of platform-specific extensions.
+    #[serde(default)]
+    downloads: std::collections::HashMap<String, String>,
 }
+
+/// VS Code's name for the platform PowerCode runs on, as used by platform-specific extensions.
+fn current_target_platform() -> &'static str {
+    match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "aarch64") => "win32-arm64",
+        ("windows", _) => "win32-x64",
+        ("macos", "aarch64") => "darwin-arm64",
+        ("macos", _) => "darwin-x64",
+        ("linux", "aarch64") if cfg!(target_env = "musl") => "alpine-arm64",
+        ("linux", _) if cfg!(target_env = "musl") => "alpine-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("linux", "arm") => "linux-armhf",
+        _ => "linux-x64",
+    }
+}
+
+/// The .vsix to install: this platform's package, else a universal one. Extensions
+/// with native parts (Claude Code, rust-analyzer, ...) publish one per platform and
+/// Open VSX's default `download` may be any of them.
+fn choose_download(metadata: &ExtensionMetadata, platform: &str) -> CmdResult<(String, String)> {
+    if let Some(url) = metadata.downloads.get(platform) {
+        return Ok((url.clone(), platform.to_string()));
+    }
+    if let Some(url) = metadata.downloads.get("universal") {
+        return Ok((url.clone(), "universal".to_string()));
+    }
+    let default_platform = metadata.target_platform.as_deref().unwrap_or("universal");
+    match &metadata.files.download {
+        Some(url) if default_platform == "universal" || default_platform == platform => {
+            Ok((url.clone(), default_platform.to_string()))
+        }
+        Some(_) => Err(format!(
+            "This extension is not available for this platform ({platform}). It is published for: {}.",
+            {
+                let mut platforms: Vec<&str> = metadata.downloads.keys().map(String::as_str).collect();
+                platforms.sort_unstable();
+                platforms.join(", ")
+            }
+        )),
+        None => Err("The extension has no .vsix file to download.".to_string()),
+    }
+}
+
+/// Written next to an installed extension: which platform's package it is.
+const INSTALL_INFO: &str = ".powercode-install.json";
 
 /// Extracts the `extension/` folder of a .vsix archive into `dest`.
 fn extract_vsix(bytes: &[u8], dest: &Path) -> CmdResult<()> {
@@ -266,10 +376,7 @@ pub async fn extensions_install(
         .json()
         .await
         .map_err(err)?;
-    let url = metadata
-        .files
-        .download
-        .ok_or("The extension has no .vsix file to download.")?;
+    let (url, platform) = choose_download(&metadata, current_target_platform())?;
 
     let bytes = download_with_progress(&url, &on_progress).await?;
 
@@ -287,6 +394,8 @@ pub async fn extensions_install(
             let _ = std::fs::remove_dir_all(&staging);
             return Err("The .vsix package has no package.json.".to_string());
         }
+        let info = serde_json::json!({ "targetPlatform": platform });
+        let _ = std::fs::write(staging.join(INSTALL_INFO), info.to_string());
         if dest.exists() {
             std::fs::remove_dir_all(&dest).map_err(err)?;
         }
@@ -313,4 +422,53 @@ pub fn extensions_read_file(app: AppHandle, id: String, relative: String) -> Cmd
         return Err("Path is outside the extension.".into());
     }
     std::fs::read_to_string(target).map_err(err)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metadata(json: serde_json::Value) -> ExtensionMetadata {
+        serde_json::from_value(json).unwrap()
+    }
+
+    #[test]
+    fn picks_this_platforms_package() {
+        // Open VSX's answer for Claude Code: the default download is another platform's.
+        let m = metadata(serde_json::json!({
+            "version": "2.1.327",
+            "targetPlatform": "alpine-arm64",
+            "files": { "download": "https://x/alpine-arm64.vsix" },
+            "downloads": {
+                "win32-x64": "https://x/win32-x64.vsix",
+                "alpine-arm64": "https://x/alpine-arm64.vsix",
+                "darwin-arm64": "https://x/darwin-arm64.vsix"
+            }
+        }));
+        assert_eq!(choose_download(&m, "win32-x64").unwrap(), ("https://x/win32-x64.vsix".into(), "win32-x64".into()));
+        assert_eq!(choose_download(&m, "darwin-arm64").unwrap().1, "darwin-arm64");
+        let missing = choose_download(&m, "linux-armhf").unwrap_err();
+        assert!(missing.contains("linux-armhf") && missing.contains("win32-x64"), "{missing}");
+    }
+
+    #[test]
+    fn universal_packages() {
+        let plain = metadata(serde_json::json!({ "files": { "download": "https://x/u.vsix" } }));
+        assert_eq!(choose_download(&plain, "win32-x64").unwrap(), ("https://x/u.vsix".into(), "universal".into()));
+        let listed = metadata(serde_json::json!({
+            "targetPlatform": "universal",
+            "files": { "download": "https://x/u.vsix" },
+            "downloads": { "universal": "https://x/u.vsix" }
+        }));
+        assert_eq!(choose_download(&listed, "linux-x64").unwrap().1, "universal");
+    }
+
+    #[test]
+    fn platform_name_matches_vscode() {
+        let platform = current_target_platform();
+        assert!(["win32-x64", "win32-arm64", "darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64", "linux-armhf", "alpine-x64", "alpine-arm64"].contains(&platform));
+        if cfg!(all(windows, target_arch = "x86_64")) {
+            assert_eq!(platform, "win32-x64");
+        }
+    }
 }

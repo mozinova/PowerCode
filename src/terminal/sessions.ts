@@ -50,6 +50,8 @@ export class TerminalSession {
   private readonly fit = new FitAddon();
   private ptyId: number | null = null;
   private opened = false;
+  /** Text sent before the shell started (e.g. by an extension), written once it has. */
+  private queued = "";
 
   constructor(
     private readonly cwd: string | null,
@@ -89,6 +91,12 @@ export class TerminalSession {
     this.term.focus();
   }
 
+  /** Types `text` into the shell, as if entered by the user. */
+  sendText(text: string) {
+    if (this.ptyId !== null) void terminalApi.write(this.ptyId, text);
+    else this.queued += text;
+  }
+
   private async start() {
     try {
       this.ptyId = await terminalApi.spawn(this.cwd, this.profile, this.term.cols, this.term.rows, (e) => {
@@ -106,6 +114,10 @@ export class TerminalSession {
     this.term.onData((data) => {
       if (this.ptyId !== null) void terminalApi.write(this.ptyId, data);
     });
+    if (this.queued && this.ptyId !== null) {
+      void terminalApi.write(this.ptyId, this.queued);
+      this.queued = "";
+    }
     this.term.onResize(({ cols, rows }) => {
       if (this.ptyId !== null) void terminalApi.resize(this.ptyId, cols, rows);
     });
@@ -162,14 +174,14 @@ export function setDefaultTerminalProfile(id: string) {
 }
 
 /** Opens a terminal in `cwd`; remote workspaces get the remote shell whatever the profile. */
-export function newTerminal(cwd: string | null, profileId?: string) {
+export function newTerminal(cwd: string | null, profileId?: string, name?: string) {
   const { sessions, profiles, defaultProfile } = useTerminals.getState();
   const remote = remoteOf(cwd);
   const profile = remote ? null : (profiles.find((p) => p.id === (profileId ?? defaultProfile)) ?? null);
   const base = remote ? remoteLabel(remote) : (profile?.name ?? "Local");
   // "PowerShell", "PowerShell (2)", ... per profile.
   const count = sessions.filter((s) => s.title === base || s.title.startsWith(`${base} (`)).length;
-  const title = count === 0 ? base : `${base} (${count + 1})`;
+  const title = name ?? (count === 0 ? base : `${base} (${count + 1})`);
   const session = new TerminalSession(cwd, profile?.id ?? null, title);
   useTerminals.setState({ sessions: [...sessions, session], active: session });
   return session;

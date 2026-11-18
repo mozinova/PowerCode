@@ -73,7 +73,10 @@ export interface ExtensionManifest {
   displayName?: string;
   description?: string;
   icon?: string;
+  /** Entry point of extensions with code, run by the extension host. */
+  main?: string;
   contributes?: {
+    commands?: { command: string; title: string | { value: string }; category?: string | { value: string } }[];
     languages?: {
       id: string;
       extensions?: string[];
@@ -129,6 +132,12 @@ export const extensionsApi = {
   details: (namespace: string, name: string) =>
     invoke<ExtensionDetails>("openvsx_details", { namespace, name }),
   list: () => invoke<InstalledExtension[]>("extensions_list"),
+  /**
+   * Latest Open VSX version of each installed `publisher.name` id, and whether the
+   * installed package is for another platform; unknown ids are left out.
+   */
+  latestVersions: (ids: string[]) =>
+    invoke<Record<string, { version: string; wrongPlatform: boolean }>>("openvsx_latest_versions", { ids }),
   install: (namespace: string, name: string, onProgress: (progress: DownloadProgress) => void) => {
     const channel = new Channel<DownloadProgress>();
     channel.onmessage = onProgress;

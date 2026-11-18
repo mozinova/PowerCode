@@ -2,16 +2,17 @@ import { message } from "@tauri-apps/plugin-dialog";
 import { Fragment, useEffect, useRef } from "react";
 import { Group as PanelGroup, Panel, Separator } from "react-resizable-panels";
 import { monaco } from "../editor/monaco";
-import { loadModel } from "../editor/models";
+import { loadModel, modelPath } from "../editor/models";
 import { errorMessage } from "../lib/ipc";
 import { mediaKind } from "../lib/media";
-import { isVirtualTab, parseCommitDiffTab, parseDiffTab, parseExtensionTab } from "../lib/virtualTabs";
+import { isVirtualTab, parseCommitDiffTab, parseDiffTab, parseExtensionTab, parseWebviewTab } from "../lib/virtualTabs";
 import { attachGitGutter } from "../git/gutter";
 import { useWorkspace, type EditorGroup } from "../state/workspace";
 import { DiffView } from "./DiffView";
 import { EditorTabs } from "./EditorTabs";
 import { ExtensionPage } from "./ExtensionPage";
 import { MediaViewer } from "./MediaViewer";
+import { WebviewAnchor } from "./WebviewFrame";
 import { Kbd } from "./ui";
 
 /** Scroll position and selections per group and file, restored when switching tabs. */
@@ -19,6 +20,33 @@ const viewStates = new Map<string, monaco.editor.ICodeEditorViewState | null>();
 const viewKey = (group: number, path: string) => `${group}\u0000${path}`;
 
 const isFocusedGroup = (group: number) => useWorkspace.getState().activeGroup === group;
+
+/** The code editor of each group showing a text file. */
+const editors = new Map<number, monaco.editor.IStandaloneCodeEditor>();
+
+/** The focused group's code editor, if it shows a text file. */
+export function activeEditor(): monaco.editor.IStandaloneCodeEditor | undefined {
+  return editors.get(useWorkspace.getState().activeGroup);
+}
+
+// Go to Definition and peek "open" targets in other files as tabs.
+monaco.editor.registerEditorOpener({
+  openCodeEditor(_source, resource, selectionOrPosition) {
+    if (resource.scheme !== "file") return false;
+    const model = monaco.editor.getModel(resource);
+    const path = (model && modelPath(model)) ?? resource.fsPath;
+    const { openFile, openFileAt } = useWorkspace.getState();
+    if (!selectionOrPosition) openFile(path);
+    else if (monaco.Range.isIRange(selectionOrPosition)) {
+      const r = selectionOrPosition;
+      openFileAt(path, r.startLineNumber, r.startColumn, r.endColumn, r.endLineNumber);
+    } else {
+      const p = selectionOrPosition;
+      openFileAt(path, p.lineNumber, p.column, p.column);
+    }
+    return true;
+  },
+});
 
 function EmptyEditor() {
   const root = useWorkspace((s) => s.root);
@@ -80,7 +108,7 @@ function applyReveal(editor: monaco.editor.ICodeEditor, group: number, path: str
   const reveal = useWorkspace.getState().reveal;
   if (!reveal || reveal.path !== path || reveal.nonce === appliedReveal || !isFocusedGroup(group)) return;
   appliedReveal = reveal.nonce;
-  const selection = new monaco.Selection(reveal.line, reveal.column, reveal.line, reveal.endColumn);
+  const selection = new monaco.Selection(reveal.line, reveal.column, reveal.endLine ?? reveal.line, reveal.endColumn);
   editor.setSelection(selection);
   editor.revealRangeInCenterIfOutsideViewport(selection);
   editor.focus();
@@ -116,6 +144,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       "semanticHighlighting.enabled": true,
     });
     editorRef.current = editor;
+    editors.set(group.id, editor);
     const gutter = attachGitGutter(editor);
     // Only the focused group's editor drives the status bar.
     const status = () => isFocusedGroup(group.id) && updateStatus(editor);
@@ -129,6 +158,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     return () => {
       listeners.forEach((l) => l.dispose());
       gutter.dispose();
+      if (editors.get(group.id) === editor) editors.delete(group.id);
       editor.dispose();
       editorRef.current = null;
     };
@@ -205,6 +235,7 @@ function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean 
   const extension = activePath ? parseExtensionTab(activePath) : null;
   const diff = activePath ? parseDiffTab(activePath) : null;
   const commitDiff = activePath ? parseCommitDiffTab(activePath) : null;
+  const webview = activePath ? parseWebviewTab(activePath) : null;
   const media = activePath && !isVirtualTab(activePath) ? mediaKind(activePath) : null;
 
   return (
@@ -218,6 +249,11 @@ function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean 
         {extension && <ExtensionPage key={activePath} namespace={extension.namespace} name={extension.name} />}
         {diff && <DiffView key={diff} path={diff} />}
         {commitDiff && <DiffView key={activePath} path={commitDiff.file} revision={commitDiff.hash} />}
+        {webview && (
+          <div className="absolute inset-0 bg-editor">
+            <WebviewAnchor id={webview} />
+          </div>
+        )}
       </div>
     </div>
   );

@@ -8,6 +8,11 @@ export interface Notification {
   kind: NotificationKind;
   title: string;
   message?: string;
+  /** Buttons; clicking one calls `onAction` with its index and dismisses the balloon. */
+  actions?: string[];
+  onAction?: (index: number) => void;
+  /** Called when the balloon is closed without an action. */
+  onDismiss?: () => void;
 }
 
 /** Errors stay until dismissed; progress stays until replaced. */
@@ -18,7 +23,28 @@ let nextId = 1;
 export const useNotifications = create<{ items: Notification[] }>(() => ({ items: [] }));
 
 export function dismiss(id: number) {
+  const item = useNotifications.getState().items.find((n) => n.id === id);
   useNotifications.setState(({ items }) => ({ items: items.filter((n) => n.id !== id) }));
+  item?.onDismiss?.();
+}
+
+/** Runs action `index` of a balloon and closes it. */
+export function runAction(id: number, index: number) {
+  const item = useNotifications.getState().items.find((n) => n.id === id);
+  useNotifications.setState(({ items }) => ({ items: items.filter((n) => n.id !== id) }));
+  item?.onAction?.(index);
+}
+
+/**
+ * Shows a balloon with buttons and resolves with the index of the one clicked,
+ * or null when it is dismissed. It stays until one of those happens.
+ */
+export function ask(kind: NotificationKind, title: string, message: string | undefined, actions: string[]): Promise<number | null> {
+  return new Promise((resolve) => {
+    const id = nextId++;
+    const item: Notification = { id, kind, title, message, actions, onAction: resolve, onDismiss: () => resolve(null) };
+    useNotifications.setState(({ items }) => ({ items: [...items, item] }));
+  });
 }
 
 export function notify(kind: NotificationKind, title: string, message?: string): number {

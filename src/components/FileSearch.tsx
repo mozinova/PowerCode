@@ -1,6 +1,6 @@
 import { Loader2, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { COMMANDS, recentCommands, runCommand, type Command } from "../commands";
+import { allCommands, recentCommands, runCommand, type Command } from "../commands";
 import { fsApi } from "../lib/ipc";
 import { track } from "../state/activity";
 import { basename, joinPath } from "../lib/paths";
@@ -33,7 +33,7 @@ const commandTitle = (c: Command) => `${c.category}: ${c.label}`;
 
 /** Commands that apply now: recently used first when nothing is typed, otherwise by match. */
 function searchCommands(query: string): CommandMatch[] {
-  const available = COMMANDS.filter((c) => c.when?.() ?? true);
+  const available = allCommands().filter((c) => c.when?.() ?? true);
   const recent = recentCommands();
   if (!query) {
     const rank = (c: Command) => (recent.includes(c.id) ? recent.indexOf(c.id) : recent.length);

@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { closeActiveTab, lastRoot, openFolder, saveActive } from "./actions";
-import { MainToolbar, StatusBar, ToolStripe } from "./components/Chrome";
+import { MainToolbar, StatusBar } from "./components/Chrome";
 import { EditorArea } from "./components/EditorArea";
 import { CommitView } from "./components/CommitView";
 import { ExtensionsView } from "./components/ExtensionsView";
@@ -9,19 +9,25 @@ import { focusCommandPalette, focusFileSearch } from "./components/FileSearch";
 import { ProjectView } from "./components/ProjectView";
 import { RemoteFolderPicker } from "./components/RemoteFolderPicker";
 import { RemoteView } from "./components/RemoteView";
+import { BottomToolButtons, ToolStripe } from "./components/ToolStripes";
 import { SearchView, focusFindInFiles } from "./components/SearchView";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { ExtensionViewContainer } from "./components/ExtensionViews";
+import { HostDialogs } from "./components/HostDialogs";
+import { OutputPanel } from "./components/OutputPanel";
 import { Toasts } from "./components/Toasts";
 import { TooltipLayer } from "./components/Tooltip";
-import { initExtensions } from "./extensions/runtime";
+import { WebviewLayer } from "./components/WebviewFrame";
+import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
+import { startExtensionHost } from "./exthost/host";
 import { startGitWatcher } from "./git/store";
-import type { LeftTool } from "./state/workspace";
+import type { ToolId } from "./state/workspace";
 import { useWorkspace } from "./state/workspace";
 
 let initialized = false;
 
-const TOOL_WINDOWS: Record<LeftTool, ReactNode> = {
+const TOOL_WINDOWS: Partial<Record<ToolId, ReactNode>> = {
   project: <ProjectView />,
   commit: <CommitView />,
   search: <SearchView />,
@@ -29,24 +35,29 @@ const TOOL_WINDOWS: Record<LeftTool, ReactNode> = {
   extensions: <ExtensionsView />,
 };
 
+/** The content of a tool window, in whichever sidebar it is. */
+function toolWindow(tool: ToolId): ReactNode {
+  return TOOL_WINDOWS[tool] ?? <ExtensionViewContainer key={tool} tool={tool} />;
+}
+
 /** IDE-wide shortcuts, handled in the capture phase so Monaco does not swallow them. */
 function useGlobalShortcuts() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const ctrl = e.ctrlKey || e.metaKey;
-      const { toggleLeftTool, toggleBottomTool } = useWorkspace.getState();
+      const { toggleTool, toggleBottomTool } = useWorkspace.getState();
       let handled = true;
       if (ctrl && !e.shiftKey && e.key.toLowerCase() === "s") void saveActive();
       else if (ctrl && !e.shiftKey && e.key.toLowerCase() === "o") void openFolder();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "n") focusFileSearch();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "p") focusCommandPalette();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "f") focusFindInFiles();
-      else if (e.altKey && !ctrl && e.code === "Digit0") toggleLeftTool("commit");
-      else if (e.altKey && !ctrl && e.code === "Digit9") toggleLeftTool("commit");
+      else if (e.altKey && !ctrl && e.code === "Digit0") toggleTool("commit");
+      else if (e.altKey && !ctrl && e.code === "Digit9") toggleTool("commit");
       else if (ctrl && e.key === "F4") closeActiveTab();
       else if (ctrl && !e.shiftKey && e.key === "\\") useWorkspace.getState().splitRight();
-      else if (e.altKey && !ctrl && e.code === "Digit1") toggleLeftTool("project");
-      else if (e.altKey && !ctrl && e.code === "Digit2") toggleLeftTool("extensions");
+      else if (e.altKey && !ctrl && e.code === "Digit1") toggleTool("project");
+      else if (e.altKey && !ctrl && e.code === "Digit2") toggleTool("extensions");
       else if (e.altKey && !ctrl && e.key === "F12") toggleBottomTool("terminal");
       else handled = false;
       if (handled) {
@@ -74,6 +85,7 @@ function useNoNativeContextMenu() {
 export default function App() {
   const leftTool = useWorkspace((s) => s.leftTool);
   const bottomTool = useWorkspace((s) => s.bottomTool);
+  const rightTool = useWorkspace((s) => s.rightTool);
 
   useGlobalShortcuts();
   useNoNativeContextMenu();
@@ -83,6 +95,8 @@ export default function App() {
     if (initialized) return;
     initialized = true;
     void initExtensions();
+    startExtensionUpdates();
+    startExtensionHost();
     startGitWatcher();
     startAutoSave();
     const previous = lastRoot();
@@ -96,14 +110,16 @@ export default function App() {
       <MainToolbar />
       {/* Tool windows and the editor are islands floating on the frame, as in IntelliJ's Islands theme. */}
       <div className="island-area relative flex min-h-0 flex-1">
-        <ToolStripe />
+        <ToolStripe side="left" footer={<BottomToolButtons />} />
         <Group orientation="vertical" className="min-w-0 flex-1">
           <Panel id="main" minSize={120}>
             <Group orientation="horizontal">
               {leftTool && (
                 <>
                   <Panel id="left" defaultSize={300} minSize={180}>
-                    <div className="island">{TOOL_WINDOWS[leftTool]}</div>
+                    <div className="island">
+                      {toolWindow(leftTool)}
+                    </div>
                   </Panel>
                   <Separator className="island-gap" />
                 </>
@@ -113,22 +129,33 @@ export default function App() {
                   <EditorArea />
                 </div>
               </Panel>
+              {rightTool && (
+                <>
+                  <Separator className="island-gap" />
+                  <Panel id="right" defaultSize={300} minSize={180}>
+                    <div className="island">
+                      {toolWindow(rightTool)}
+                    </div>
+                  </Panel>
+                </>
+              )}
             </Group>
           </Panel>
           {bottomTool && (
             <>
               <Separator className="island-gap" />
               <Panel id="bottom" defaultSize={260} minSize={100}>
-                <div className="island">
-                  <TerminalPanel />
-                </div>
+                <div className="island">{bottomTool === "output" ? <OutputPanel /> : <TerminalPanel />}</div>
               </Panel>
             </>
           )}
         </Group>
+        <ToolStripe side="right" />
       </div>
       <StatusBar />
       <RemoteFolderPicker />
+      <WebviewLayer />
+      <HostDialogs />
       <Toasts />
       <TooltipLayer />
     </div>

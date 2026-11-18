@@ -1,6 +1,6 @@
 import { CircleAlert, CircleCheck, Info, Loader2, X } from "lucide-react";
 import type { ReactNode } from "react";
-import { dismiss, useNotifications, type NotificationKind } from "../state/notifications";
+import { dismiss, runAction, useNotifications, type NotificationKind } from "../state/notifications";
 
 const ICONS: Record<NotificationKind, ReactNode> = {
   info: <Info size={16} className="shrink-0 text-accent-hover" />,
@@ -27,6 +27,22 @@ export function Toasts() {
             {n.message && (
               <div className="mt-0.5 max-h-40 overflow-y-auto text-xs break-words whitespace-pre-wrap text-fg-muted">
                 {n.message}
+              </div>
+            )}
+            {n.actions && n.actions.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {n.actions.map((action, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => runAction(n.id, i)}
+                    className={`h-6 rounded px-2.5 text-xs ${
+                      i === 0 ? "bg-accent text-white hover:bg-accent-hover" : "border border-line-soft text-fg hover:bg-hover"
+                    }`}
+                  >
+                    {action}
+                  </button>
+                ))}
               </div>
             )}
           </div>

@@ -33,7 +33,7 @@ const MATCHES_SHOWN = 100;
 
 /** Opens Find in Files and focuses its query (Ctrl+Shift+F). */
 export function focusFindInFiles() {
-  useWorkspace.getState().setLeftTool("search");
+  useWorkspace.getState().showTool("search");
   requestAnimationFrame(() => {
     const input = document.getElementById(INPUT_ID) as HTMLInputElement | null;
     input?.focus();
@@ -175,7 +175,7 @@ function FileResult({
 
 export function SearchView() {
   const root = useWorkspace((s) => s.root);
-  const toggleLeftTool = useWorkspace((s) => s.toggleLeftTool);
+  const toggleTool = useWorkspace((s) => s.toggleTool);
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
@@ -278,7 +278,7 @@ export function SearchView() {
           onClick={() => setCollapsed(new Set(results.map((r) => r.path)))}
           className="size-7"
         />
-        <IconButton icon={Minus} title="Hide" onClick={() => toggleLeftTool("search")} className="size-7" />
+        <IconButton icon={Minus} title="Hide" onClick={() => toggleTool("search")} className="size-7" />
       </ToolWindowHeader>
 
       <div className="flex gap-1 pr-3 pl-1 pb-2">

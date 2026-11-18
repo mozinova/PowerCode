@@ -5,9 +5,10 @@ import { closeTab, closeTabs } from "../actions";
 import { basename, isWithin, parentDir } from "../lib/paths";
 import { REVEAL_LABEL } from "../lib/platform";
 import { isSshPath } from "../lib/remote";
-import { isVirtualTab, parseCommitDiffTab, parseDiffTab, parseExtensionTab } from "../lib/virtualTabs";
+import { isVirtualTab, parseCommitDiffTab, parseDiffTab, parseExtensionTab, parseWebviewTab } from "../lib/virtualTabs";
 import { GIT_COLORS, gitStateOf, useGit } from "../git/store";
 import { useWorkspace, type EditorGroup, type EditorTab } from "../state/workspace";
+import { EditorTitleActions } from "./ExtensionViews";
 import { FileIcon } from "./FileIcon";
 import { ContextMenu, DropdownMenu, type MenuEntry } from "./Menu";
 import { tooltipProps } from "./Tooltip";
@@ -101,6 +102,7 @@ function tabFile(tab: EditorTab): string | null {
 
 function tabTooltip(tab: EditorTab): string {
   if (parseExtensionTab(tab.path)) return `Extension: ${tab.name}`;
+  if (parseWebviewTab(tab.path)) return tab.name;
   const commit = parseCommitDiffTab(tab.path);
   if (commit) return `${commit.file} @ ${commit.hash.slice(0, 8)}`;
   return parseDiffTab(tab.path) ?? tab.path;
@@ -251,6 +253,7 @@ export function EditorTabs({ group, focused }: { group: EditorGroup; focused: bo
           />
         ))}
       </div>
+      <EditorTitleActions path={activePath} />
       <IconButton
         icon={Columns2}
         title="Split Editor Right"

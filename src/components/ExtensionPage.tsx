@@ -1,10 +1,10 @@
 import { message } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import DOMPurify from "dompurify";
-import { BadgeCheck, Blocks, Download, ExternalLink, Loader2, Star } from "lucide-react";
+import { BadgeCheck, Blocks, Download, ExternalLink, Loader2, RefreshCw, Star } from "lucide-react";
 import { marked } from "marked";
 import { useEffect, useMemo, useState, type MouseEvent, type ReactNode } from "react";
-import { installExtension, installedIconUrl, uninstallExtension, useExtensions } from "../extensions/runtime";
+import { installExtension, installedIconUrl, isNewerVersion, uninstallExtension, useExtensions } from "../extensions/runtime";
 import {
   errorMessage,
   extensionsApi,
@@ -79,6 +79,29 @@ function LinkButton({ href, children }: { href: string; children: ReactNode }) {
     >
       {children}
       <ExternalLink size={12} className="shrink-0" />
+    </button>
+  );
+}
+
+/** Offers the newer version when Open VSX has one, e.g. "Update to 2.1.0". */
+function UpdateButton({ namespace, name, latest }: { namespace: string; name: string; latest: string }) {
+  const id = `${namespace}.${name}`.toLowerCase();
+  const installedVersion = useExtensions((s) => s.installed.find((e) => e.id === id)?.manifest.version);
+  const wrongPlatform = useExtensions((s) => s.wrongPlatform[id] === true);
+  const progress = useInstallProgress(namespace, name);
+  if (!installedVersion || progress || !(wrongPlatform || isNewerVersion(latest, installedVersion))) return null;
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        void installExtension(namespace, name).catch((e) =>
+          message(`Could not update the extension:\n${errorMessage(e)}`, { title: "PowerCode", kind: "error" }),
+        )
+      }
+      className="flex h-8 items-center gap-1.5 rounded-md bg-accent px-4 font-medium text-white hover:bg-accent-hover"
+    >
+      <RefreshCw size={14} />
+      {wrongPlatform ? "Reinstall for This Platform" : `Update to ${latest}`}
     </button>
   );
 }
@@ -230,6 +253,7 @@ export function ExtensionPage({ namespace, name }: { namespace: string; name: st
             </div>
             {metadata.description && <p className="text-fg-muted">{metadata.description}</p>}
             <div className="mt-1.5 flex items-center gap-3">
+              <UpdateButton namespace={metadata.namespace} name={metadata.name} latest={metadata.version} />
               <InstallButton namespace={metadata.namespace} name={metadata.name} />
               {installed && <span className="text-xs text-fg-subtle">Installed v{installed.manifest.version}</span>}
             </div>

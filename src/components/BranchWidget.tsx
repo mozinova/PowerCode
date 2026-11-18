@@ -37,7 +37,7 @@ export function BranchWidget() {
   const label = status.detached ? `HEAD (${status.head?.slice(0, 7) ?? "detached"})` : (status.branch ?? "main");
   const local = branches.filter((b) => !b.remote);
   const remote = branches.filter((b) => b.remote);
-  const { setLeftTool } = useWorkspace.getState();
+  const { showTool } = useWorkspace.getState();
 
   const items: MenuEntry[] = [
     {
@@ -46,7 +46,7 @@ export function BranchWidget() {
       detail: status.behind ? `${status.behind} incoming` : undefined,
       action: () => void pull(),
     },
-    { label: "Commit…", icon: GitCommitHorizontal, shortcut: "Alt+0", action: () => setLeftTool("commit") },
+    { label: "Commit…", icon: GitCommitHorizontal, shortcut: "Alt+0", action: () => showTool("commit") },
     {
       label: "Push…",
       icon: ArrowUpFromLine,
@@ -58,7 +58,7 @@ export function BranchWidget() {
       label: "Show Git Log",
       icon: GitGraph,
       shortcut: "Alt+9",
-      action: () => setLeftTool("commit"),
+      action: () => showTool("commit"),
     },
     "separator",
     { label: "New Branch…", icon: GitBranchPlus, action: () => setCreating(true) },

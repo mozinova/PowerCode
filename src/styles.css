@@ -124,9 +124,9 @@ body {
   inset: 1.5px 14px;
 }
 
-/* Space between the islands and the window around them. */
+/* Space between the islands and the window around them; the stripes on both sides make the side margins. */
 .island-area {
-  padding: 0 var(--island-margin) var(--island-margin) 0;
+  padding: 0 0 var(--island-margin) 0;
 }
 [data-separator].island-gap[data-separator="hover"]::before,
 [data-separator].island-gap[data-separator="active"]::before {
@@ -280,4 +280,9 @@ body {
 }
 .monaco-editor .git-gutter-deleted-below::before {
   bottom: -4px;
+}
+
+/* While dragging (splitters, selections), webviews must not swallow the mouse. */
+.pc-dragging .webview-box {
+  pointer-events: none;
 }

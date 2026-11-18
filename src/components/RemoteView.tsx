@@ -183,7 +183,7 @@ function AddSshHostDialog({ onAdded, onClose }: { onAdded: () => void; onClose: 
 /** Remote Explorer: SSH hosts from ~/.ssh/config and WSL distributions to open folders on. */
 export function RemoteView() {
   const root = useWorkspace((s) => s.root);
-  const toggleLeftTool = useWorkspace((s) => s.toggleLeftTool);
+  const toggleTool = useWorkspace((s) => s.toggleTool);
   const openFile = useWorkspace((s) => s.openFile);
   const [hosts, setHosts] = useState<RemoteHosts | null>(null);
   const [adding, setAdding] = useState(false);
@@ -220,7 +220,7 @@ export function RemoteView() {
           <IconButton icon={Settings2} title="Open SSH Config File" onClick={() => openFile(hosts.sshConfig)} className="size-7" size={14} />
         )}
         <IconButton icon={RefreshCw} title="Refresh" onClick={load} className="size-7" size={14} />
-        <IconButton icon={Minus} title="Hide" onClick={() => toggleLeftTool("remote")} className="size-7" />
+        <IconButton icon={Minus} title="Hide" onClick={() => toggleTool("remote")} className="size-7" />
       </ToolWindowHeader>
 
       {current && (

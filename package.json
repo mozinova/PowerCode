@@ -7,12 +7,16 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "build:exthost": "esbuild ext-host/src/host.ts --bundle --platform=node --target=node20 --format=cjs --outfile=src-tauri/resources/ext-host.cjs",
+    "check:exthost": "tsc -p ext-host",
+    "prepare:exthost": "node scripts/fetch-node.mjs && bun run build:exthost"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.8.4",
     "@tauri-apps/plugin-opener": "^2",
+    "@vscode/codicons": "0.0.36",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "diff": "^9.0.0",
@@ -35,8 +39,10 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "@vitejs/plugin-react": "^6.0.2",
+    "esbuild": "^0.28.2",
     "tailwindcss": "^4.3.5",
     "typescript": "~6.0.3",
-    "vite": "^8.0.16"
+    "vite": "^8.0.16",
+    "vscode-uri": "^3.2.0"
   }
 }

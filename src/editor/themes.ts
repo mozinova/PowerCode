@@ -187,13 +187,22 @@ function defineMonacoTheme(theme: EditorTheme, extraRules: monaco.editor.ITokenT
   });
 }
 
+let activeColors: Record<string, string> = {};
+
+/** Workbench colours of the active theme (`editor.background`, ...), e.g. for webviews. */
+export function activeThemeColors(): Record<string, string> {
+  return activeColors;
+}
+
 /** Defines `theme` synchronously so editors can be created with it right away. */
 export function defineEditorTheme(theme: EditorTheme) {
   defineMonacoTheme(theme, []);
+  activeColors = theme.colors;
 }
 
 /** Makes `theme` the active editor theme for both Monarch and TextMate tokens. */
 export async function applyEditorTheme(theme: EditorTheme) {
+  activeColors = theme.colors;
   defineMonacoTheme(theme, []);
   monaco.editor.setTheme(theme.id);
   const textMateRules = await setTextMateTheme({ name: theme.label, settings: theme.tokenColors });

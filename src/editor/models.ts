@@ -50,6 +50,14 @@ export function loadModel(path: string): Promise<monaco.editor.ITextModel> {
   return promise;
 }
 
+const saveListeners = new Set<(path: string, model: monaco.editor.ITextModel) => void>();
+
+/** Calls `listener` after a model is saved to disk; returns the unsubscribe function. */
+export function onDidSaveModel(listener: (path: string, model: monaco.editor.ITextModel) => void) {
+  saveListeners.add(listener);
+  return () => void saveListeners.delete(listener);
+}
+
 export async function saveModel(path: string) {
   const model = getModel(path);
   if (!model) return;
@@ -57,6 +65,7 @@ export async function saveModel(path: string) {
   await fsApi.writeTextFile(path, model.getValue());
   savedVersions.set(path, version);
   useWorkspace.getState().setDirty(path, isDirty(path, model));
+  saveListeners.forEach((listener) => listener(path, model));
 }
 
 /** Moves an open model to the file's new path, keeping unsaved edits. */

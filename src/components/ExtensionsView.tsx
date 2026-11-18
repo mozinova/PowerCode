@@ -1,9 +1,10 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { BadgeCheck, Blocks, Download, Loader2, Minus, Search, Trash2 } from "lucide-react";
+import { BadgeCheck, Blocks, Download, Loader2, Minus, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { setIconTheme, useIconThemes } from "../extensions/iconThemes";
 import { openExtensionPage } from "../actions";
 import {
+  checkForUpdates,
   installExtension,
   installedIconUrl,
   setEditorTheme,
@@ -11,6 +12,8 @@ import {
   useExtensions,
 } from "../extensions/runtime";
 import { errorMessage, extensionsApi, type InstalledExtension, type OpenVsxEntry } from "../lib/ipc";
+import { notify } from "../state/notifications";
+import { setAutoUpdateExtensions, useSettings } from "../state/settings";
 import { useWorkspace } from "../state/workspace";
 import { InstallProgressBar, useInstallProgress } from "./InstallProgress";
 import { Select } from "./Select";
@@ -96,10 +99,21 @@ function ThemePickers() {
   const activeThemeId = useExtensions((s) => s.activeThemeId);
   const iconThemes = useIconThemes((s) => s.options);
   const activeIconThemeId = useIconThemes((s) => s.activeId);
+  const autoUpdate = useSettings((s) => s.autoUpdateExtensions);
   return (
     <div className="py-1">
       <Picker label="Editor theme" options={themes} value={activeThemeId} onSelect={setEditorTheme} />
       <Picker label="File icon theme" options={iconThemes} value={activeIconThemeId} onSelect={setIconTheme} />
+      <label className="flex items-center gap-2 px-3 py-1.5">
+        <span className="w-28 shrink-0 text-fg-muted">Auto update</span>
+        <input
+          type="checkbox"
+          checked={autoUpdate}
+          onChange={(e) => setAutoUpdateExtensions(e.target.checked)}
+          className="accent-accent"
+        />
+        <span className="text-xs text-fg-subtle">Checks at startup and every 6 hours</span>
+      </label>
     </div>
   );
 }
@@ -108,6 +122,8 @@ function InstalledRow({ ext }: { ext: InstalledExtension }) {
   const [busy, setBusy] = useState(false);
   const { manifest } = ext;
   const icon = installedIconUrl(ext);
+  const update = useExtensions((s) => s.updates[ext.id]);
+  const progress = useInstallProgress(manifest.publisher, manifest.name);
   return (
     <div
       onClick={() =>
@@ -122,7 +138,25 @@ function InstalledRow({ ext }: { ext: InstalledExtension }) {
           <span className="shrink-0 text-xs text-fg-subtle">{manifest.version}</span>
         </div>
         <div className="truncate text-xs text-fg-muted">{summarize(ext)}</div>
+        {progress && <InstallProgressBar progress={progress} className="mt-1.5" />}
       </div>
+      {update && !progress && (
+        <button
+          type="button"
+          {...tooltipProps(`Update to ${update}`)}
+          onClick={async (e) => {
+            e.stopPropagation();
+            try {
+              await installExtension(manifest.publisher, manifest.name);
+            } catch (err) {
+              await reportError("Could not update the extension", err);
+            }
+          }}
+          className="flex h-7 shrink-0 items-center rounded-md bg-accent px-2.5 text-xs font-medium text-white hover:bg-accent-hover"
+        >
+          Update
+        </button>
+      )}
       <button
         type="button"
         {...tooltipProps("Uninstall")}
@@ -237,13 +271,25 @@ function SectionTitle({ children }: { children: string }) {
 export function ExtensionsView() {
   const [query, setQuery] = useState("");
   const installed = useExtensions((s) => s.installed);
-  const toggleLeftTool = useWorkspace((s) => s.toggleLeftTool);
+  const toggleTool = useWorkspace((s) => s.toggleTool);
   const { results, loading, error } = useOpenVsxSearch(query);
 
   return (
     <div className="flex h-full flex-col">
       <ToolWindowHeader title="Extensions">
-        <IconButton icon={Minus} title="Hide" onClick={() => toggleLeftTool("extensions")} className="size-7" />
+        <IconButton
+          icon={RefreshCw}
+          title="Check for Extension Updates"
+          onClick={() =>
+            void checkForUpdates(false).then(
+              (ids) => notify("info", ids.length ? `${ids.length} ${ids.length === 1 ? "update" : "updates"} available` : "All extensions are up to date"),
+              (e) => notify("error", "Could not check for updates", errorMessage(e)),
+            )
+          }
+          className="size-7"
+          size={14}
+        />
+        <IconButton icon={Minus} title="Hide" onClick={() => toggleTool("extensions")} className="size-7" />
       </ToolWindowHeader>
       <div className="px-3 pb-2">
         <div className="flex items-center gap-2 rounded-md border border-input-border bg-input px-2 focus-within:border-accent">

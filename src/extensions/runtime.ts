@@ -9,13 +9,16 @@ import { attachGrammar, registerGrammar } from "../editor/textmate";
 import { POWERCODE_DARK, applyEditorTheme, type EditorTheme } from "../editor/themes";
 import { joinPath } from "../lib/paths";
 import { track } from "../state/activity";
-import { extensionsApi, type DownloadProgress, type InstalledExtension } from "../lib/ipc";
+import { errorMessage, extensionsApi, type DownloadProgress, type InstalledExtension } from "../lib/ipc";
+import { notify } from "../state/notifications";
+import { useSettings } from "../state/settings";
 import {
   BUILTIN_ICON_THEME_ID,
   resetIconThemeIfFrom,
   setIconTheme,
   setIconThemeOptions,
   storedIconThemeId,
+  useIconThemes,
 } from "./iconThemes";
 
 const THEME_STORAGE_KEY = "powercode.editorTheme";
@@ -43,6 +46,10 @@ interface ExtensionsState {
   activeThemeId: string;
   /** Installs in flight, by lower-case `namespace.name`. */
   installing: Record<string, InstallProgress>;
+  /** Newer versions on Open VSX, by installed extension id. */
+  updates: Record<string, string>;
+  /** Installed extensions whose package is for another platform (they need reinstalling). */
+  wrongPlatform: Record<string, boolean>;
 }
 
 export const useExtensions = create<ExtensionsState>(() => ({
@@ -50,6 +57,8 @@ export const useExtensions = create<ExtensionsState>(() => ({
   themes: [BUILTIN_THEME],
   activeThemeId: BUILTIN_THEME.id,
   installing: {},
+  updates: {},
+  wrongPlatform: {},
 }));
 
 /** Disposables of each activated extension, for uninstalling without a restart. */
@@ -333,7 +342,92 @@ export async function installExtension(namespace: string, name: string) {
   await activate(ext);
   const others = useExtensions.getState().installed.filter((e) => e.id !== ext.id);
   setInstalled([...others, ext].sort((a, b) => a.id.localeCompare(b.id)));
+  useExtensions.setState(({ updates, wrongPlatform }) => {
+    const { [ext.id]: _installed, ...rest } = updates;
+    const { [ext.id]: _fixed, ...otherPlatforms } = wrongPlatform;
+    return { updates: rest, wrongPlatform: otherPlatforms };
+  });
+  await reapplyThemesFrom(ext.id);
   return ext;
+}
+
+/** After an update, themes from the extension are reloaded so their new colours show. */
+async function reapplyThemesFrom(extensionId: string) {
+  const { themes, activeThemeId } = useExtensions.getState();
+  if (themes.some((t) => t.id === activeThemeId && t.extensionId === extensionId)) {
+    await setEditorTheme(activeThemeId).catch(() => {});
+  }
+  const icons = useIconThemes.getState();
+  if (icons.options.some((o) => o.id === icons.activeId && o.extensionId === extensionId)) {
+    await setIconTheme(icons.activeId).catch(() => {});
+  }
+}
+
+/** Compares dotted versions numerically; a pre-release (`1.2.0-beta`) is older than its release. */
+export function isNewerVersion(candidate: string, current: string): boolean {
+  const parse = (v: string) => {
+    const [core, pre] = v.split("-", 2);
+    return { parts: core.split(".").map((n) => parseInt(n, 10) || 0), pre: pre ?? null };
+  };
+  const a = parse(candidate);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.parts.length, b.parts.length); i++) {
+    const diff = (a.parts[i] ?? 0) - (b.parts[i] ?? 0);
+    if (diff !== 0) return diff > 0;
+  }
+  if (a.pre === b.pre) return false;
+  if (a.pre === null) return true;
+  if (b.pre === null) return false;
+  return a.pre > b.pre;
+}
+
+const openVsxId = (ext: InstalledExtension) => `${ext.manifest.publisher}.${ext.manifest.name}`;
+
+/**
+ * Looks up newer versions of the installed extensions; with `install`, also
+ * installs them. Returns the ids that have (or had) an update.
+ */
+export async function checkForUpdates(install: boolean): Promise<string[]> {
+  const installed = useExtensions.getState().installed;
+  if (installed.length === 0) return [];
+  const latest = await track("Checking for extension updates…", () =>
+    extensionsApi.latestVersions(installed.map(openVsxId)),
+  );
+  // A package for another platform (e.g. Linux binaries on Windows) is replaced like an update.
+  const outdated = installed.filter((ext) => {
+    const info = latest[openVsxId(ext)];
+    return info !== undefined && (info.wrongPlatform || isNewerVersion(info.version, ext.manifest.version));
+  });
+  useExtensions.setState({
+    updates: Object.fromEntries(outdated.map((ext) => [ext.id, latest[openVsxId(ext)].version])),
+    wrongPlatform: Object.fromEntries(outdated.filter((ext) => latest[openVsxId(ext)].wrongPlatform).map((ext) => [ext.id, true])),
+  });
+  if (install) {
+    const updated: string[] = [];
+    for (const ext of outdated) {
+      try {
+        await installExtension(ext.manifest.publisher, ext.manifest.name);
+        updated.push(ext.manifest.displayName ?? ext.manifest.name);
+      } catch (e) {
+        notify("error", `Could not update ${ext.manifest.displayName ?? ext.manifest.name}`, errorMessage(e));
+      }
+    }
+    if (updated.length > 0) notify("success", `Updated ${updated.length} ${updated.length === 1 ? "extension" : "extensions"}`, updated.join(", "));
+  }
+  return outdated.map((ext) => ext.id);
+}
+
+const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const FIRST_CHECK_DELAY_MS = 15_000;
+
+/** Checks shortly after startup and every 6 hours, installing updates when auto update is on. */
+export function startExtensionUpdates() {
+  const run = () =>
+    void checkForUpdates(useSettings.getState().autoUpdateExtensions).catch(() => {
+      // Offline or Open VSX unreachable: try again next time.
+    });
+  window.setTimeout(run, FIRST_CHECK_DELAY_MS);
+  window.setInterval(run, UPDATE_INTERVAL_MS);
 }
 
 export async function uninstallExtension(id: string) {

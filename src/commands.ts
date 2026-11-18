@@ -10,8 +10,12 @@ import { useGit } from "./git/store";
 import { remoteOf } from "./lib/remote";
 import { parseDiffTab } from "./lib/virtualTabs";
 import { notify } from "./state/notifications";
-import { setAutoSave, useSettings } from "./state/settings";
-import { useWorkspace, type LeftTool } from "./state/workspace";
+import { setAutoSave, setAutoUpdateExtensions, useSettings } from "./state/settings";
+import { checkForUpdates, useExtensions } from "./extensions/runtime";
+import { openUserSettings, restartExtensionHost, showOutput } from "./exthost/host";
+import * as hostRpc from "./exthost/rpc";
+import { useExtensionHost } from "./exthost/state";
+import { useWorkspace, type ToolId } from "./state/workspace";
 import { newTerminal } from "./terminal/sessions";
 
 export interface Command {
@@ -50,8 +54,8 @@ async function saveAll() {
   if (dirty.length > 0) notify("success", `Saved ${dirty.length} ${dirty.length === 1 ? "file" : "files"}`);
 }
 
-function showTool(tool: LeftTool) {
-  useWorkspace.getState().setLeftTool(tool);
+function showTool(tool: ToolId) {
+  useWorkspace.getState().showTool(tool);
 }
 
 function newTerminalHere() {
@@ -115,10 +119,59 @@ export const COMMANDS: Command[] = [
     run: initRepository,
   },
   { id: "remote.close", category: "Remote", label: "Close Remote Connection", when: isRemote, run: closeRemoteConnection },
+  {
+    id: "extensions.checkUpdates",
+    category: "Extensions",
+    label: "Check for Extension Updates",
+    run: async () => {
+      const ids = await checkForUpdates(useSettings.getState().autoUpdateExtensions);
+      if (ids.length === 0) notify("info", "All extensions are up to date");
+    },
+  },
+  {
+    id: "extensions.toggleAutoUpdate",
+    category: "Extensions",
+    label: "Toggle Auto Update",
+    run: () => {
+      const on = !useSettings.getState().autoUpdateExtensions;
+      setAutoUpdateExtensions(on);
+      notify("info", on ? "Extension auto update is on" : "Extension auto update is off");
+    },
+  },
+  {
+    id: "extensions.restartHost",
+    category: "Developer",
+    label: "Restart Extension Host",
+    when: () => useExtensionHost.getState().status !== "stopped",
+    run: restartExtensionHost,
+  },
+  { id: "view.output", category: "View", label: "Show Output", run: () => showOutput() },
   { id: "preferences.theme", category: "Preferences", label: "Color Theme / File Icon Theme", run: () => showTool("extensions") },
+  { id: "preferences.settingsJson", category: "Preferences", label: "Open User Settings (JSON)", run: openUserSettings },
   { id: "window.maximize", category: "Window", label: "Toggle Maximize", run: () => getCurrentWindow().toggleMaximize() },
   { id: "window.minimize", category: "Window", label: "Minimize", run: () => getCurrentWindow().minimize() },
 ];
+
+/** Commands contributed by running extensions, executed in the extension host. */
+function contributedCommands(): Command[] {
+  const installed = useExtensions.getState().installed;
+  return useExtensionHost.getState().commands.map((c) => {
+    const manifest = installed.find((e) => e.id === c.extension)?.manifest;
+    return {
+      id: `ext:${c.command}`,
+      category: c.category ?? manifest?.displayName ?? manifest?.name ?? c.extension,
+      label: c.title,
+      run: async () => {
+        await hostRpc.request("commands/execute", { command: c.command, args: [] });
+      },
+    };
+  });
+}
+
+/** Every command for the palette: PowerCode's own and those of extensions. */
+export function allCommands(): Command[] {
+  return [...COMMANDS, ...contributedCommands()];
+}
 
 const RECENT_KEY = "powercode.recentCommands";
 const MAX_RECENT = 8;

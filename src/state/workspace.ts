@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import { basename, movedPath } from "../lib/paths";
+import { sideOf } from "./toolLayout";
 
-export type LeftTool = "project" | "commit" | "search" | "remote" | "extensions";
-export type BottomTool = "terminal";
+/** Built-in tool windows, and `view:<container>` for extensions' view containers. */
+export type ToolId = "project" | "commit" | "search" | "remote" | "extensions" | `view:${string}`;
+export type BottomTool = "terminal" | "output";
 
 export interface EditorTab {
   path: string;
@@ -25,6 +27,8 @@ export interface RevealRequest {
   line: number;
   column: number;
   endColumn: number;
+  /** Last line of the selection; `line` when absent. */
+  endLine?: number;
   /** Distinguishes repeated requests for the same location. */
   nonce: number;
 }
@@ -51,7 +55,9 @@ interface WorkspaceState {
   tabs: EditorTab[];
   /** The active group's active tab. */
   activePath: string | null;
-  leftTool: LeftTool | null;
+  /** The open tool window of each sidebar; tools live on one side (see state/toolLayout.ts). */
+  leftTool: ToolId | null;
+  rightTool: ToolId | null;
   bottomTool: BottomTool | null;
   cursor: CursorInfo | null;
   status: EditorStatus | null;
@@ -64,8 +70,8 @@ interface WorkspaceState {
   /** Opens (or focuses) a tab in the active group; `name` defaults to the file name, for page tabs it is their title. */
   openFile: (path: string, name?: string, icon?: string) => void;
   setTabIcon: (path: string, icon: string) => void;
-  /** Opens a file and selects `line`, from `column` to `endColumn` (1-based, UTF-16). */
-  openFileAt: (path: string, line: number, column: number, endColumn: number) => void;
+  /** Opens a file and selects from `line`:`column` to `endLine`:`endColumn` (1-based, UTF-16; `endLine` defaults to `line`). */
+  openFileAt: (path: string, line: number, column: number, endColumn: number, endLine?: number) => void;
   /** Closes a tab of `group` (the active group by default); an emptied group goes away unless it is the last. */
   closeTab: (path: string, group?: number) => void;
   /** Activates a tab of `group` (the active group by default) and focuses that group. */
@@ -76,9 +82,12 @@ interface WorkspaceState {
   setDirty: (path: string, dirty: boolean) => void;
   /** Re-points tabs at `from`, or inside it, after it was renamed to `to`. */
   renamePaths: (from: string, to: string) => void;
-  toggleLeftTool: (tool: LeftTool) => void;
+  /** Opens or closes a tool window, in whichever sidebar it is. */
+  toggleTool: (tool: ToolId) => void;
   /** Shows a tool window (without toggling it off when already shown). */
-  setLeftTool: (tool: LeftTool) => void;
+  showTool: (tool: ToolId) => void;
+  /** Shows a tool window in `side` after it moved there, closing it on the other side. */
+  placeTool: (tool: ToolId, side: "left" | "right") => void;
   toggleBottomTool: (tool: BottomTool) => void;
   setCursor: (cursor: CursorInfo | null) => void;
   setStatus: (status: EditorStatus | null) => void;
@@ -114,6 +123,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   root: null,
   ...withGroups([initialGroup], initialGroup.id),
   leftTool: "project",
+  rightTool: null,
   bottomTool: null,
   cursor: null,
   status: null,
@@ -145,9 +155,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return withGroups(groups, s.activeGroup);
     }),
 
-  openFileAt: (path, line, column, endColumn) => {
+  openFileAt: (path, line, column, endColumn, endLine) => {
     get().openFile(path);
-    set((s) => ({ reveal: { path, line, column, endColumn, nonce: (s.reveal?.nonce ?? 0) + 1 } }));
+    set((s) => ({ reveal: { path, line, column, endColumn, endLine, nonce: (s.reveal?.nonce ?? 0) + 1 } }));
   },
 
   setTabIcon: (path, icon) =>
@@ -227,8 +237,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       return withGroups(groups, s.activeGroup);
     }),
 
-  toggleLeftTool: (tool) => set((s) => ({ leftTool: s.leftTool === tool ? null : tool })),
-  setLeftTool: (tool) => set({ leftTool: tool }),
+  toggleTool: (tool) =>
+    set((s) =>
+      sideOf(tool) === "left"
+        ? { leftTool: s.leftTool === tool ? null : tool }
+        : { rightTool: s.rightTool === tool ? null : tool },
+    ),
+  showTool: (tool) => set(sideOf(tool) === "left" ? { leftTool: tool } : { rightTool: tool }),
+  placeTool: (tool, side) =>
+    set((s) => {
+      const wasOpen = s.leftTool === tool || s.rightTool === tool;
+      const left = s.leftTool === tool ? null : s.leftTool;
+      const right = s.rightTool === tool ? null : s.rightTool;
+      if (!wasOpen) return { leftTool: left, rightTool: right };
+      return side === "left" ? { leftTool: tool, rightTool: right } : { leftTool: left, rightTool: tool };
+    }),
   toggleBottomTool: (tool) => set((s) => ({ bottomTool: s.bottomTool === tool ? null : tool })),
   setCursor: (cursor) => set({ cursor }),
   setStatus: (status) => set({ status }),

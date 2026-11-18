@@ -1,5 +1,7 @@
 mod error;
 mod extensions;
+mod exthost;
+mod webview;
 mod fs;
 mod git;
 mod profiles;
@@ -16,6 +18,9 @@ pub fn run() {
         .manage(terminal::Terminals::default())
         .manage(search::Searches::default())
         .manage(remote::Remotes::default())
+        .manage(exthost::ExtensionHost::default())
+        .manage(webview::Webviews::default())
+        .register_asynchronous_uri_scheme_protocol(webview::SCHEME, webview::handle)
         .invoke_handler(tauri::generate_handler![
             fs::list_dir,
             fs::list_project_files,
@@ -52,8 +57,14 @@ pub fn run() {
             remote::remote_add_ssh_host,
             remote::remote_home,
             remote::remote_disconnect,
+            exthost::exthost_start,
+            exthost::exthost_send,
+            exthost::exthost_stop,
+            webview::webview_set_html,
+            webview::webview_dispose,
             extensions::openvsx_search,
             extensions::openvsx_details,
+            extensions::openvsx_latest_versions,
             extensions::extensions_list,
             extensions::extensions_install,
             extensions::extensions_uninstall,

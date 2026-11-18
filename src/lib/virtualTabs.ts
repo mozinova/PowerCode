@@ -52,6 +52,23 @@ export function parseCommitDiffTab(path: string): { hash: string; file: string }
   return colon > 0 ? { hash: rest.slice(0, colon), file: rest.slice(colon + 1) } : null;
 }
 
+const WEBVIEW_PREFIX = "webview:";
+
+/** A tab showing an extension's webview panel. */
+export function webviewTabPath(id: string): string {
+  return WEBVIEW_PREFIX + id;
+}
+
+/** The webview shown by a webview tab, or null for any other tab. */
+export function parseWebviewTab(path: string): string | null {
+  return path.startsWith(WEBVIEW_PREFIX) ? path.slice(WEBVIEW_PREFIX.length) : null;
+}
+
 export function isVirtualTab(path: string): boolean {
-  return parseExtensionTab(path) !== null || parseDiffTab(path) !== null || parseCommitDiffTab(path) !== null;
+  return (
+    parseExtensionTab(path) !== null ||
+    parseDiffTab(path) !== null ||
+    parseCommitDiffTab(path) !== null ||
+    parseWebviewTab(path) !== null
+  );
 }

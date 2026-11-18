@@ -254,7 +254,7 @@ function Tree({ root }: { root: string }) {
     refreshRef.current();
   }, [fsVersion]);
   const openFile = useWorkspace((s) => s.openFile);
-  const toggleLeftTool = useWorkspace((s) => s.toggleLeftTool);
+  const toggleTool = useWorkspace((s) => s.toggleTool);
   const [selected, setSelected] = useState<string | null>(null);
   const [focused, setFocused] = useState(false);
   const [menu, setMenu] = useState<{ x: number; y: number; row: Row | null } | null>(null);
@@ -425,7 +425,7 @@ function Tree({ root }: { root: string }) {
         />
         <IconButton icon={RefreshCw} title="Reload from Disk" onClick={refresh} className="size-7" size={14} />
         <IconButton icon={ChevronsDownUp} title="Collapse All" onClick={collapseAll} className="size-7" />
-        <IconButton icon={Minus} title="Hide" onClick={() => toggleLeftTool("project")} className="size-7" />
+        <IconButton icon={Minus} title="Hide" onClick={() => toggleTool("project")} className="size-7" />
       </ToolWindowHeader>
       <div
         ref={listRef}
@@ -529,13 +529,13 @@ function Tree({ root }: { root: string }) {
 
 export function ProjectView() {
   const root = useWorkspace((s) => s.root);
-  const toggleLeftTool = useWorkspace((s) => s.toggleLeftTool);
+  const toggleTool = useWorkspace((s) => s.toggleTool);
 
   if (!root) {
     return (
       <div className="flex h-full flex-col">
         <ToolWindowHeader title="Project">
-          <IconButton icon={Minus} title="Hide" onClick={() => toggleLeftTool("project")} className="size-7" />
+          <IconButton icon={Minus} title="Hide" onClick={() => toggleTool("project")} className="size-7" />
         </ToolWindowHeader>
         <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-fg-muted">
           <p>No folder is open.</p>

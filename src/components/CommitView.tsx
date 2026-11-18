@@ -172,7 +172,7 @@ function CommitButton({
 export function CommitView() {
   const status = useGit((s) => s.status);
   const root = useWorkspace((s) => s.root);
-  const toggleLeftTool = useWorkspace((s) => s.toggleLeftTool);
+  const toggleTool = useWorkspace((s) => s.toggleTool);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -198,7 +198,7 @@ export function CommitView() {
     <div className="flex h-full flex-col">
       <ToolWindowHeader title="Commit">
         <IconButton icon={RefreshCw} title="Refresh" onClick={() => void refreshGit()} className="size-7" size={14} />
-        <IconButton icon={Minus} title="Hide" onClick={() => toggleLeftTool("commit")} className="size-7" />
+        <IconButton icon={Minus} title="Hide" onClick={() => toggleTool("commit")} className="size-7" />
       </ToolWindowHeader>
 
       {!root ? (
