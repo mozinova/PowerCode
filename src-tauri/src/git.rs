@@ -293,9 +293,12 @@ pub async fn git_status(root: String) -> CmdResult<GitStatus> {
         let Ok(top) = toplevel(&root) else {
             return Ok(GitStatus::default());
         };
+        // `--ignored=matching`: an ignored folder (node_modules/, target/) is one entry.
+        // Plain `--ignored` with `--untracked-files=all` lists every file inside it:
+        // tens of thousands of entries on each poll, which froze the UI (worst on WSL).
         let status = run(
             &top,
-            &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored"],
+            &["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--ignored=matching"],
         );
         match status {
             Ok(output) => Ok(parse_status(&top, &output)),

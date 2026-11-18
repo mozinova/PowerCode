@@ -3,7 +3,7 @@
 
 import { create } from "zustand";
 import { gitApi, type GitFile, type GitStatus } from "../lib/ipc";
-import { isWithin, parentDir } from "../lib/paths";
+import { parentDir } from "../lib/paths";
 import { pathKey } from "../lib/platform";
 import { track } from "../state/activity";
 import { isTrusted, useTrust } from "../state/trust";
@@ -48,15 +48,15 @@ interface GitStore {
   files: Map<string, GitFile>;
   /** Folders containing changes, by `pathKey`. */
   folders: Map<string, GitFileState>;
-  ignored: string[];
+  /** Ignored files and folders (git reports an ignored folder, not its files), by `pathKey`. */
+  ignored: Set<string>;
+  /** `pathKey` of the repository root, where looking for an ignored parent stops. */
+  top: string | null;
 }
 
-export const useGit = create<GitStore>(() => ({
-  status: null,
-  files: new Map(),
-  folders: new Map(),
-  ignored: [],
-}));
+const EMPTY = (): Omit<GitStore, "status"> => ({ files: new Map(), folders: new Map(), ignored: new Set(), top: null });
+
+export const useGit = create<GitStore>(() => ({ status: null, ...EMPTY() }));
 
 /** Folders take the most important state among the changes inside them. */
 const FOLDER_PRIORITY: GitFileState[] = ["conflicted", "modified", "untracked"];
@@ -64,13 +64,13 @@ const FOLDER_PRIORITY: GitFileState[] = ["conflicted", "modified", "untracked"];
 function index(status: GitStatus): Omit<GitStore, "status"> {
   const files = new Map<string, GitFile>();
   const folders = new Map<string, GitFileState>();
-  const ignored: string[] = [];
+  const ignored = new Set<string>();
   const top = status.top ? pathKey(status.top) : null;
 
   for (const file of status.files) {
     files.set(pathKey(file.path), file);
     if (file.ignored) {
-      ignored.push(file.path);
+      ignored.add(pathKey(file.path));
       continue;
     }
     const state = fileState(file);
@@ -85,7 +85,7 @@ function index(status: GitStatus): Omit<GitStore, "status"> {
       if (key === top || parentDir(dir) === dir) break;
     }
   }
-  return { files, folders, ignored };
+  return { files, folders, ignored, top };
 }
 
 /** The git state shown for a file or folder in the tree and tabs. */
@@ -97,7 +97,13 @@ export function gitStateOf(store: GitStore, path: string, isDir = false): GitFil
     const folder = store.folders.get(key);
     if (folder) return folder;
   }
-  return store.ignored.some((dir) => isWithin(key, pathKey(dir))) ? "ignored" : null;
+  if (store.ignored.size === 0) return null;
+  // The path or a folder above it, up to the repository root: as deep as the path, not as long as the list
+  // (rows of the tree ask this on every render and scroll).
+  for (let dir = key; ; dir = pathKey(parentDir(dir))) {
+    if (store.ignored.has(dir)) return "ignored";
+    if (dir === store.top || pathKey(parentDir(dir)) === dir) return null;
+  }
 }
 
 export function useGitState(path: string, isDir = false): GitFileState | null {
@@ -115,7 +121,7 @@ export async function refreshGit() {
   const root = useWorkspace.getState().root;
   // In Restricted Mode git does not run: a repository's config can run commands (e.g. `core.fsmonitor`).
   if (!root || !isTrusted()) {
-    useGit.setState({ status: null, files: new Map(), folders: new Map(), ignored: [] });
+    useGit.setState({ status: null, ...EMPTY() });
     return;
   }
   inFlight = true;
@@ -127,7 +133,7 @@ export async function refreshGit() {
     if (useWorkspace.getState().root === root && !unchanged) useGit.setState({ status, ...index(status) });
   } catch {
     if (useWorkspace.getState().root === root) {
-      useGit.setState({ status: null, files: new Map(), folders: new Map(), ignored: [] });
+      useGit.setState({ status: null, ...EMPTY() });
     }
   } finally {
     inFlight = false;
