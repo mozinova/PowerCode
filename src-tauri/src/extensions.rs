@@ -3,7 +3,6 @@
 //! the frontend; no extension code is ever executed.
 
 use serde::{Deserialize, Serialize};
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -13,7 +12,9 @@ use tauri::{AppHandle, Manager};
 use crate::error::{err, CmdResult};
 
 pub(crate) const OPEN_VSX_API: &str = "https://open-vsx.org/api";
-const MAX_VSIX_BYTES: usize = 200 * 1024 * 1024;
+/// Only a sanity bound against a broken server: extensions with native parts
+/// (language servers, debuggers, AI backends) are often hundreds of megabytes.
+const MAX_VSIX_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 pub(crate) fn http() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
@@ -289,8 +290,8 @@ fn choose_download(metadata: &ExtensionMetadata, platform: &str) -> CmdResult<(S
 const INSTALL_INFO: &str = ".powercode-install.json";
 
 /// Extracts the `extension/` folder of a .vsix archive into `dest`.
-fn extract_vsix(bytes: &[u8], dest: &Path) -> CmdResult<()> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).map_err(err)?;
+fn extract_vsix(vsix: impl std::io::Read + std::io::Seek, dest: &Path) -> CmdResult<()> {
+    let mut archive = zip::ZipArchive::new(vsix).map_err(err)?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).map_err(err)?;
         // `enclosed_name` rejects absolute paths and `..` traversal.
@@ -320,7 +321,8 @@ pub struct DownloadProgress {
 /// Interval between progress events, so a fast download does not flood the UI.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
-async fn download_with_progress(url: &str, on_progress: &Channel<DownloadProgress>) -> CmdResult<Vec<u8>> {
+/// Downloads `url` into the file `to` (not memory: packages can be large), reporting progress.
+async fn download_with_progress(url: &str, to: &Path, on_progress: &Channel<DownloadProgress>) -> CmdResult<()> {
     let mut response = http()
         .get(url)
         .send()
@@ -329,31 +331,31 @@ async fn download_with_progress(url: &str, on_progress: &Channel<DownloadProgres
         .error_for_status()
         .map_err(err)?;
     let total = response.content_length();
-    if total.is_some_and(|t| t > MAX_VSIX_BYTES as u64) {
+    if total.is_some_and(|t| t > MAX_VSIX_BYTES) {
         return Err("The extension is too large.".into());
     }
 
-    let mut bytes = Vec::with_capacity(total.unwrap_or(0) as usize);
-    let report = |downloaded: usize| {
-        let _ = on_progress.send(DownloadProgress {
-            downloaded: downloaded as u64,
-            total,
-        });
+    let report = |downloaded: u64| {
+        let _ = on_progress.send(DownloadProgress { downloaded, total });
     };
     report(0);
+    let mut file = std::io::BufWriter::new(std::fs::File::create(to).map_err(err)?);
+    let mut downloaded: u64 = 0;
     let mut last_report = Instant::now();
     while let Some(chunk) = response.chunk().await.map_err(err)? {
-        bytes.extend_from_slice(&chunk);
-        if bytes.len() > MAX_VSIX_BYTES {
+        std::io::Write::write_all(&mut file, &chunk).map_err(err)?;
+        downloaded += chunk.len() as u64;
+        if downloaded > MAX_VSIX_BYTES {
             return Err("The extension is too large.".into());
         }
         if last_report.elapsed() >= PROGRESS_INTERVAL {
-            report(bytes.len());
+            report(downloaded);
             last_report = Instant::now();
         }
     }
-    report(bytes.len());
-    Ok(bytes)
+    std::io::Write::flush(&mut file).map_err(err)?;
+    report(downloaded);
+    Ok(())
 }
 
 #[tauri::command]
@@ -378,16 +380,25 @@ pub async fn extensions_install(
         .map_err(err)?;
     let (url, platform) = choose_download(&metadata, current_target_platform())?;
 
-    let bytes = download_with_progress(&url, &on_progress).await?;
-
     let root = extensions_dir(&app)?;
     let id = format!("{namespace}.{name}").to_lowercase();
     let staging = root.join(format!(".staging-{id}"));
     let dest = root.join(&id);
+    // Next to the extensions (same disk), removed whatever happens.
+    let package = root.join(format!(".download-{id}.vsix"));
+    let downloaded = download_with_progress(&url, &package, &on_progress).await;
+    if let Err(e) = downloaded {
+        let _ = std::fs::remove_file(&package);
+        return Err(e);
+    }
 
     tauri::async_runtime::spawn_blocking(move || {
         let _ = std::fs::remove_dir_all(&staging);
-        extract_vsix(&bytes, &staging).inspect_err(|_| {
+        let extracted = std::fs::File::open(&package)
+            .map_err(err)
+            .and_then(|file| extract_vsix(std::io::BufReader::new(file), &staging));
+        let _ = std::fs::remove_file(&package);
+        extracted.inspect_err(|_| {
             let _ = std::fs::remove_dir_all(&staging);
         })?;
         if !staging.join("package.json").is_file() {
@@ -449,6 +460,34 @@ mod tests {
         assert_eq!(choose_download(&m, "darwin-arm64").unwrap().1, "darwin-arm64");
         let missing = choose_download(&m, "linux-armhf").unwrap_err();
         assert!(missing.contains("linux-armhf") && missing.contains("win32-x64"), "{missing}");
+    }
+
+    #[test]
+    fn extracts_packages_from_disk() {
+        use std::io::Write;
+        let dir = std::env::temp_dir().join(format!("powercode-vsix-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let package = dir.join("x.vsix");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&package).unwrap());
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("extension/package.json", options).unwrap();
+        zip.write_all(br#"{"name":"x"}"#).unwrap();
+        zip.start_file("extension/out/main.js", options).unwrap();
+        zip.write_all(b"exports.activate = () => {};").unwrap();
+        zip.start_file("extension/../escape.txt", options).unwrap();
+        zip.write_all(b"no").unwrap();
+        zip.start_file("extension.vsixmanifest", options).unwrap();
+        zip.write_all(b"<x/>").unwrap();
+        zip.finish().unwrap();
+
+        let dest = dir.join("out");
+        extract_vsix(std::io::BufReader::new(std::fs::File::open(&package).unwrap()), &dest).unwrap();
+        assert_eq!(std::fs::read_to_string(dest.join("package.json")).unwrap(), r#"{"name":"x"}"#);
+        assert!(dest.join("out").join("main.js").is_file());
+        assert!(!dir.join("escape.txt").exists() && !dest.join("escape.txt").exists(), "no path traversal");
+        assert!(!dest.join("extension.vsixmanifest").exists(), "only the extension/ folder");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
