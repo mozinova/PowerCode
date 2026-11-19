@@ -17,7 +17,11 @@ import * as views from "./views";
 import * as decorations from "./decorations";
 import * as authentication from "./authentication";
 import * as files from "./files";
+import * as chat from "./chat";
+import * as comments from "./comments";
+import * as lm from "./lm";
 import * as scm from "./scm";
+import * as testing from "./testing";
 import * as tabs from "./tabs";
 import * as tasks from "./tasks";
 import * as terminals from "./terminals";
@@ -1128,8 +1132,12 @@ export function createApi(description: ExtensionDescription) {
         return scm.firstInputBox();
       },
     },
-    comments: {},
-    tests: {},
+    comments: {
+      createCommentController: comments.createCommentController,
+    },
+    tests: {
+      createTestController: testing.createTestController,
+    },
     notebooks: {},
     authentication: {
       registerAuthenticationProvider: authentication.registerAuthenticationProvider,
@@ -1138,8 +1146,20 @@ export function createApi(description: ExtensionDescription) {
       getAccounts: authentication.getAccounts,
       onDidChangeSessions: authentication.onDidChangeSessions.event,
     },
-    chat: {},
-    lm: {},
+    chat: {
+      createChatParticipant: (id: string, handler: unknown) => chat.createChatParticipant(extensionId, id, handler),
+    },
+    lm: {
+      registerLanguageModelChatProvider: (vendor: string, provider: unknown) => lm.registerLanguageModelChatProvider(extensionId, vendor, provider),
+      selectChatModels: (selector?: { vendor?: string; family?: string; version?: string; id?: string }) => lm.selectChatModels(extensionId, selector),
+      onDidChangeChatModels: lm.onDidChangeChatModels.event,
+      registerTool: (name: string, tool: unknown) => lm.registerTool(extensionId, name, tool),
+      invokeTool: lm.invokeTool,
+      get tools() {
+        return lm.toolInfos();
+      },
+      registerMcpServerDefinitionProvider: lm.registerMcpServerDefinitionProvider,
+    },
   };
 
   // Every member VS Code has exists, implemented or not (see completeNamespace).

@@ -16,6 +16,8 @@ import { SearchView, focusFindInFiles } from "./components/SearchView";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { DebugConsole } from "./components/DebugConsole";
 import { DebugView } from "./components/DebugView";
+import { TestingView } from "./components/TestingView";
+import { ChatView } from "./components/ChatView";
 import { ExtensionViewContainer } from "./components/ExtensionViews";
 import { HostDialogs } from "./components/HostDialogs";
 import { OutputPanel } from "./components/OutputPanel";
@@ -44,6 +46,8 @@ const TOOL_WINDOWS: Partial<Record<ToolId, ReactNode>> = {
   remote: <RemoteView />,
   extensions: <ExtensionsView />,
   debug: <DebugView />,
+  testing: <TestingView />,
+  chat: <ChatView />,
 };
 
 /** The content of a tool window, in whichever sidebar it is. */
@@ -83,6 +87,7 @@ function useGlobalShortcuts() {
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "p") focusCommandPalette();
       else if (ctrl && !e.shiftKey && e.key.toLowerCase() === "t") focusSymbolSearch();
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "b") void runTask("build");
+      else if (ctrl && e.altKey && e.key.toLowerCase() === "i") toggleTool("chat");
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "f") focusFindInFiles();
       else if (e.altKey && !ctrl && e.code === "Digit0") toggleTool("commit");
       else if (e.altKey && !ctrl && e.code === "Digit9") toggleTool("commit");

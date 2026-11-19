@@ -56,6 +56,9 @@ import { contributions, registerViewHandlers, resetViews, setConfigurationContex
 import { registerCustomEditorHandlers, resetCustomEditors } from "./customEditors";
 import { registerDecorationHandlers, resetDecorations } from "./decorations";
 import { registerScmHandlers, resetScm } from "./scm";
+import { registerTestingHandlers, resetTesting } from "./testing";
+import { registerCommentHandlers, resetComments } from "./comments";
+import { registerChatHandlers, resetChat } from "./chat";
 import { syncToHost as syncBreakpointsToHost } from "../debug/breakpoints";
 import { registerDebugHover } from "../debug/editor";
 import { registerDebugHandlers, resetDebug } from "../debug/model";
@@ -158,6 +161,9 @@ function forgetHostState() {
   resetViews();
   resetDecorations();
   resetScm();
+  resetTesting();
+  resetComments();
+  resetChat();
   resetVirtualDocuments();
   resetCustomEditors();
   resetDebug();
@@ -745,6 +751,9 @@ function registerHandlers() {
   registerWebviewHandlers();
   registerDecorationHandlers(rpc.onNotification);
   registerScmHandlers(rpc.onNotification);
+  registerTestingHandlers(rpc.onNotification);
+  registerCommentHandlers(rpc.onNotification);
+  registerChatHandlers(rpc.onNotification);
   registerVirtualDocumentHandlers(rpc.onNotification);
   registerDebugHandlers();
   registerCustomEditorHandlers();

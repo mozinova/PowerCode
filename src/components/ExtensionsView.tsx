@@ -1,6 +1,6 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { BadgeCheck, Blocks, Download, Loader2, Minus, PowerOff, RefreshCw, Search, Trash2, Upload } from "lucide-react";
-import { useEffect, useState } from "react";
+import { BadgeCheck, Blocks, ChevronDown, ChevronRight, Download, Loader2, Minus, PowerOff, RefreshCw, Search, Trash2, Upload } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { setIconTheme, useIconThemes } from "../extensions/iconThemes";
 import { openExtensionPage, pickAndInstallVsix } from "../actions";
 import {
@@ -302,11 +302,61 @@ function useOpenVsxSearch(query: string) {
   return { results, loading, error };
 }
 
-function SectionTitle({ children }: { children: string }) {
+const COLLAPSED_KEY = "powercode.extensionSections.collapsed";
+
+function storedCollapsed(): string[] {
+  try {
+    const list = JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Which sections are collapsed, remembered across sessions. */
+function useCollapsedSections() {
+  const [collapsed, setCollapsed] = useState<string[]>(storedCollapsed);
+  const toggle = (id: string) =>
+    setCollapsed((current) => {
+      const next = current.includes(id) ? current.filter((c) => c !== id) : [...current, id];
+      try {
+        localStorage.setItem(COLLAPSED_KEY, JSON.stringify(next));
+      } catch {
+        // Not remembering it is harmless.
+      }
+      return next;
+    });
+  return { isCollapsed: (id: string) => collapsed.includes(id), toggle };
+}
+
+/** A list's title; clicking it collapses or expands the list. */
+function Section({
+  title,
+  count,
+  collapsed,
+  onToggle,
+  children,
+}: {
+  title: string;
+  count?: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
   return (
-    <div className="px-3 pt-3 pb-1 text-[11px] font-semibold tracking-wide text-fg-subtle uppercase">
-      {children}
-    </div>
+    <section>
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        onClick={onToggle}
+        className="flex w-full items-center gap-1 px-2 pt-3 pb-1 text-left text-[11px] font-semibold tracking-wide text-fg-subtle uppercase hover:text-fg-muted"
+      >
+        {collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+        {title}
+        {count !== undefined && <span className="ml-1 rounded-full bg-hover px-1.5 font-normal normal-case">{count}</span>}
+      </button>
+      {!collapsed && children}
+    </section>
   );
 }
 
@@ -316,6 +366,8 @@ export function ExtensionsView() {
   const disabled = useExtensions((s) => s.disabled);
   const toggleTool = useWorkspace((s) => s.toggleTool);
   const { results, loading, error } = useOpenVsxSearch(query);
+  const { isCollapsed, toggle } = useCollapsedSections();
+  const searching = query.trim() !== "";
 
   return (
     <div className="flex h-full flex-col">
@@ -351,33 +403,31 @@ export function ExtensionsView() {
       <div className="min-h-0 flex-1 overflow-y-auto pb-2">
         <ThemePickers />
         {installed.length > 0 && (
-          <>
-            <SectionTitle>Installed</SectionTitle>
+          <Section title="Installed" count={installed.length} collapsed={isCollapsed("installed")} onToggle={() => toggle("installed")}>
             {installed.map((ext) => (
               <InstalledRow key={ext.id} ext={ext} />
             ))}
-          </>
+          </Section>
         )}
         {disabled.length > 0 && (
-          <>
-            <SectionTitle>Disabled</SectionTitle>
+          <Section title="Disabled" count={disabled.length} collapsed={isCollapsed("disabled")} onToggle={() => toggle("disabled")}>
             {disabled.map((ext) => (
               <InstalledRow key={ext.id} ext={ext} />
             ))}
-          </>
+          </Section>
         )}
-        <SectionTitle>{query.trim() ? "Results" : "Popular on Open VSX"}</SectionTitle>
-        {error && <p className="px-3 py-2 text-danger">{error}</p>}
-        {!error && !loading && results.length === 0 && (
-          <p className="px-3 py-2 text-fg-muted">No extensions found.</p>
-        )}
-        {results.map((entry) => (
-          <MarketplaceRow key={`${entry.namespace}.${entry.name}`} entry={entry} />
-        ))}
-        <p className="px-3 pt-3 text-xs text-fg-subtle">
-          Themes, file icon themes, grammars, snippets and language configurations are supported. Extension
-          JavaScript code is not executed.
-        </p>
+        {/* Search results and the popular list fold separately: a search always shows its results. */}
+        <Section
+          title={searching ? "Results" : "Popular on Open VSX"}
+          collapsed={isCollapsed(searching ? "results" : "popular")}
+          onToggle={() => toggle(searching ? "results" : "popular")}
+        >
+          {error && <p className="px-3 py-2 text-danger">{error}</p>}
+          {!error && !loading && results.length === 0 && <p className="px-3 py-2 text-fg-muted">No extensions found.</p>}
+          {results.map((entry) => (
+            <MarketplaceRow key={`${entry.namespace}.${entry.name}`} entry={entry} />
+          ))}
+        </Section>
       </div>
     </div>
   );

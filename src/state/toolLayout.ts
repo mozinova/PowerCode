@@ -34,8 +34,11 @@ export function sideOf(id: string): Side {
   const { left, right, rightDefaults } = useToolLayout.getState();
   if (left.includes(id)) return "left";
   if (right.includes(id)) return "right";
-  return rightDefaults.includes(id) ? "right" : "left";
+  return rightDefaults.includes(id) || BUILTIN_RIGHT.includes(id) ? "right" : "left";
 }
+
+/** Built-in tools that start in the right sidebar, as VS Code's secondary sidebar holds Chat. */
+const BUILTIN_RIGHT = ["chat"];
 
 export function setRightDefaults(ids: string[]) {
   const current = useToolLayout.getState().rightDefaults;

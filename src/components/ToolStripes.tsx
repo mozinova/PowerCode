@@ -1,6 +1,8 @@
-import { Blocks, Bug, Folder, GitCommitHorizontal, ScrollText, Search, Server, SquareChevronRight, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Blocks, Bug, FlaskConical, MessagesSquare, Folder, GitCommitHorizontal, ScrollText, Search, Server, SquareChevronRight, SquareTerminal, type LucideIcon } from "lucide-react";
 import { useRef, type ReactNode } from "react";
 import { create } from "zustand";
+import { countResults, useTesting } from "../exthost/testing";
+import { useChat } from "../exthost/chat";
 import { useViews } from "../exthost/views";
 import { useGit } from "../git/store";
 import { arrange, moveTool, useToolLayout, type Side } from "../state/toolLayout";
@@ -27,11 +29,18 @@ function useToolEntries(): ToolEntry[] {
   const changeCount = useGit((s) => s.status?.files.filter((f) => !f.ignored).length ?? 0);
   const containers = useVisibleContainers();
   const info = useViews((s) => s.info);
+  // Testing shows once an extension has tests, as in VS Code; its badge counts failures.
+  const hasTests = useTesting((s) => s.controllers.length > 0);
+  const failedTests = useTesting((s) => countResults(s.controllers, s.results).failed);
+  // Chat shows once an extension offers a chat participant.
+  const hasChat = useChat((s) => s.participants.length > 0);
   return [
     { id: "project", title: "Project", shortcut: "Alt+1", icon: lucide(Folder), badge: 0 },
     { id: "commit", title: "Commit", shortcut: "Alt+0", icon: lucide(GitCommitHorizontal), badge: changeCount },
     { id: "search", title: "Find in Files", shortcut: "Ctrl+Shift+F", icon: lucide(Search), badge: 0 },
     { id: "debug", title: "Run and Debug", shortcut: "Ctrl+Shift+D", icon: lucide(Bug), badge: 0 },
+    ...(hasTests ? [{ id: "testing" as const, title: "Testing", icon: lucide(FlaskConical), badge: failedTests }] : []),
+    ...(hasChat ? [{ id: "chat" as const, title: "Chat", shortcut: "Ctrl+Alt+I", icon: lucide(MessagesSquare), badge: 0 }] : []),
     { id: "remote", title: "Remote Hosts", icon: lucide(Server), badge: 0 },
     { id: "extensions", title: "Extensions", shortcut: "Alt+2", icon: lucide(Blocks), badge: 0 },
     ...containers.map((c) => ({

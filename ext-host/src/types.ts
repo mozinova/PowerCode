@@ -982,6 +982,10 @@ export enum CommentThreadCollapsibleState {
   Collapsed = 0, Expanded = 1,
 }
 
+export enum CommentThreadState {
+  Unresolved = 0, Resolved = 1,
+}
+
 export enum TestRunProfileKind {
   Run = 1, Debug = 2, Coverage = 3,
 }
@@ -1294,6 +1298,16 @@ export class TestMessage {
   constructor(public message: string | MarkdownString) {}
 }
 
+export class TestRunRequest {
+  constructor(
+    readonly include: readonly unknown[] | undefined = undefined,
+    readonly exclude: readonly unknown[] | undefined = undefined,
+    readonly profile: unknown = undefined,
+    readonly continuous = false,
+    readonly preserveFocus = true,
+  ) {}
+}
+
 export class TerminalLink {
   constructor(
     public startIndex: number,
@@ -1304,4 +1318,167 @@ export class TerminalLink {
 
 export class TerminalProfile {
   constructor(public options: unknown) {}
+}
+
+// ---- Language models and chat ----------------------------------------------------------
+
+export enum LanguageModelChatMessageRole {
+  User = 1, Assistant = 2,
+}
+
+export enum LanguageModelChatToolMode {
+  Auto = 1, Required = 2,
+}
+
+export enum ChatResultFeedbackKind {
+  Unhelpful = 0, Helpful = 1,
+}
+
+export class LanguageModelTextPart {
+  constructor(public value: string) {}
+}
+
+export class LanguageModelDataPart {
+  constructor(
+    public data: Uint8Array,
+    public mimeType: string,
+  ) {}
+  static image(data: Uint8Array, mimeType: string) {
+    return new LanguageModelDataPart(data, mimeType);
+  }
+  static json(value: unknown, mimeType = "text/x-json") {
+    return new LanguageModelDataPart(new TextEncoder().encode(JSON.stringify(value)), mimeType);
+  }
+  static text(value: string, mimeType = "text/plain") {
+    return new LanguageModelDataPart(new TextEncoder().encode(value), mimeType);
+  }
+}
+
+export class LanguageModelPromptTsxPart {
+  constructor(public value: unknown) {}
+}
+
+export class LanguageModelToolCallPart {
+  constructor(
+    public callId: string,
+    public name: string,
+    public input: object,
+  ) {}
+}
+
+export class LanguageModelToolResultPart {
+  constructor(
+    public callId: string,
+    public content: unknown[],
+  ) {}
+}
+
+export class LanguageModelToolResult {
+  constructor(public content: unknown[]) {}
+}
+
+type MessageContent = string | (LanguageModelTextPart | LanguageModelToolResultPart | LanguageModelToolCallPart | LanguageModelDataPart)[];
+
+export class LanguageModelChatMessage {
+  content: (LanguageModelTextPart | LanguageModelToolResultPart | LanguageModelToolCallPart | LanguageModelDataPart)[];
+  static User(content: MessageContent, name?: string) {
+    return new LanguageModelChatMessage(LanguageModelChatMessageRole.User, content, name);
+  }
+  static Assistant(content: MessageContent, name?: string) {
+    return new LanguageModelChatMessage(LanguageModelChatMessageRole.Assistant, content, name);
+  }
+  constructor(
+    public role: LanguageModelChatMessageRole,
+    content: MessageContent,
+    public name?: string,
+  ) {
+    this.content = typeof content === "string" ? [new LanguageModelTextPart(content)] : content;
+  }
+}
+
+export class LanguageModelError extends Error {
+  static NoPermissions = (message?: string) => new LanguageModelError(message ?? "No permissions", "NoPermissions");
+  static Blocked = (message?: string) => new LanguageModelError(message ?? "Blocked", "Blocked");
+  static NotFound = (message?: string) => new LanguageModelError(message ?? "Not found", "NotFound");
+  constructor(
+    message?: string,
+    readonly code = "Unknown",
+  ) {
+    super(message);
+  }
+}
+
+export class ChatResponseMarkdownPart {
+  value: MarkdownString;
+  constructor(value: string | MarkdownString) {
+    this.value = typeof value === "string" ? new MarkdownString(value) : value;
+  }
+}
+
+export class ChatResponseAnchorPart {
+  constructor(
+    public value: unknown,
+    public title?: string,
+  ) {}
+}
+
+export class ChatResponseFileTreePart {
+  constructor(
+    public value: unknown[],
+    public baseUri: Uri,
+  ) {}
+}
+
+export class ChatResponseProgressPart {
+  constructor(public value: string) {}
+}
+
+export class ChatResponseReferencePart {
+  constructor(
+    public value: unknown,
+    public iconPath?: unknown,
+  ) {}
+}
+
+export class ChatResponseCommandButtonPart {
+  constructor(public value: Command) {}
+}
+
+export class ChatRequestTurn {
+  constructor(
+    readonly prompt: string,
+    readonly command: string | undefined,
+    readonly references: readonly unknown[],
+    readonly participant: string,
+    readonly toolReferences: readonly unknown[] = [],
+  ) {}
+}
+
+export class ChatResponseTurn {
+  constructor(
+    readonly response: readonly unknown[],
+    readonly result: object,
+    readonly participant: string,
+    readonly command?: string,
+  ) {}
+}
+
+export class McpStdioServerDefinition {
+  constructor(
+    public label: string,
+    public command: string,
+    public args: string[] = [],
+    public env: Record<string, string | number | null> = {},
+    public version?: string,
+  ) {}
+  cwd?: Uri;
+}
+
+export class McpHttpServerDefinition {
+  constructor(
+    public label: string,
+    public uri: Uri,
+    public headers: Record<string, string> = {},
+    public version?: string,
+  ) {}
 }

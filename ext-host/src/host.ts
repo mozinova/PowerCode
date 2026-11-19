@@ -13,7 +13,11 @@ import * as rpc from "./rpc";
 import * as views from "./views";
 import * as debug from "./debug";
 import * as authentication from "./authentication";
+import * as chat from "./chat";
+import * as comments from "./comments";
+import * as lm from "./lm";
 import * as scm from "./scm";
+import * as testing from "./testing";
 import * as files from "./files";
 import * as tabs from "./tabs";
 import * as tasks from "./tasks";
@@ -297,6 +301,8 @@ function containsMatch(dir: string, globs: string[], depth: number): boolean {
 setCommandActivator(async (command) => activateByEvent(`onCommand:${command}`));
 debug.setDebugActivator(activateByEvent);
 tasks.setTaskActivator(activateByEvent);
+chat.setChatActivator(activateByEvent);
+lm.setLmActivator(activateByEvent);
 authentication.setAuthenticationActivator(activateByEvent);
 
 // ---- Messages from the UI ---------------------------------------------------
@@ -335,6 +341,8 @@ rpc.onRequest("initialize", async (params: any) => {
 });
 
 rpc.onNotification("start", async () => {
+  // The Chat view lists declared participants before their extensions activate.
+  chat.announce();
   await activateByEvent("*");
   activateForWorkspaceContents();
   await activateByEvent("onStartupFinished");
@@ -356,6 +364,7 @@ function revive(arg: any): unknown {
   if (arg && typeof arg === "object" && typeof arg.$uri === "string") return Uri.parse(arg.$uri);
   if (arg && typeof arg === "object" && arg.$treeItem) return views.treeElement(arg.$treeItem);
   if (arg && typeof arg === "object" && arg.$scm) return scm.scmElement(arg.$scm);
+  if (arg && typeof arg === "object" && arg.$comment) return comments.commentElement(arg.$comment);
   return arg;
 }
 
@@ -438,6 +447,10 @@ terminals.listen();
 tasks.listen();
 authentication.listen();
 scm.listen();
+testing.listen();
+comments.listen();
+chat.listen();
+lm.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

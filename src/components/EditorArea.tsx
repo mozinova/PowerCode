@@ -23,6 +23,7 @@ import { SettingsPage } from "./SettingsPage";
 import { CustomEditorView } from "./CustomEditorView";
 import { attachGitGutter } from "../git/gutter";
 import { attachDebugger } from "../debug/editor";
+import { attachComments } from "../editor/comments";
 import { editorOptions, followEditorSettings } from "../editor/options";
 import { uriToPath } from "../editor/uris";
 import { useWorkspace, type EditorGroup } from "../state/workspace";
@@ -171,6 +172,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     editors.set(group.id, editor);
     const gutter = attachGitGutter(editor);
     const debugging = attachDebugger(editor);
+    const comments = attachComments(editor);
     const unfollow = followEditorSettings(editor);
     // Only the focused group's editor drives the status bar.
     const status = () => isFocusedGroup(group.id) && updateStatus(editor);
@@ -185,6 +187,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       listeners.forEach((l) => l.dispose());
       gutter.dispose();
       debugging.dispose();
+      comments.dispose();
       unfollow();
       if (editors.get(group.id) === editor) editors.delete(group.id);
       editor.dispose();

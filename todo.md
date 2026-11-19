@@ -62,16 +62,29 @@ and the surface generated from `@types/vscode` (`bun run gen:vscode-surface`).
       messages in the UI, `statusBarCommands` in the status bar, `scm/inputBox` menu.
       Extensions built on the `vscode.git` extension's API (GitLens) still need that
       built-in extension.
-- [ ] `tests.createTestController` — not implemented (Testing view).
-- [ ] `comments.createCommentController` — not implemented (review comments, e.g.
-      GitHub Pull Requests).
+- [x] `tests.createTestController` — Testing tool window (shown once an extension has
+      tests): discovery, run/debug per test or all, results, failure messages, output in
+      "Test Results". Missing: coverage, continuous runs, test gutter icons in the editor,
+      tags, `TestRunRequest.exclude` from the UI.
+- [x] `comments.createCommentController` — threads under their lines in the editor, reply
+      box with the extension's `comments/commentThread/context` buttons, gutter "+" on
+      commenting ranges. Missing: reactions, editing a comment in place (`CommentMode.Editing`),
+      a Comments panel listing every thread, file-level comments.
 
 ## AI and chat
 
-- [ ] `chat.createChatParticipant` — not implemented.
-- [ ] `lm.*` — not implemented: `selectChatModels`, `registerLanguageModelChatProvider`,
-      `registerTool`, `invokeTool`, `tools`, `onDidChangeChatModels`,
-      `registerMcpServerDefinitionProvider`.
+- [x] `chat.createChatParticipant` — Chat tool window (right sidebar, Ctrl+Alt+I, shown
+      once an extension declares a participant): `@participant`, `/command`, model picker,
+      streamed markdown, progress, buttons, references, file trees, follow-ups, history,
+      cancel. Missing: `#file` / selection references in requests, tool calling by the
+      chat itself (agent mode), inline chat in the editor, feedback (👍/👎), saved sessions.
+- [x] `lm.*` — `registerLanguageModelChatProvider`, `selectChatModels`, `sendRequest`
+      (consent once per extension), `countTokens`, `onDidChangeChatModels`, `registerTool`,
+      `invokeTool` (with the tool's confirmation), `tools`.
+- [ ] `lm.registerMcpServerDefinitionProvider` — accepted, but PowerCode does not start
+      MCP servers or offer their tools yet.
+- [ ] A built-in language model provider (the user's Anthropic/OpenAI key, or Ollama):
+      without an extension providing models, participants have nothing to answer with.
 
 ## Notebooks
 

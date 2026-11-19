@@ -4,7 +4,7 @@ import { parseCustomEditorTab } from "../lib/virtualTabs";
 import { sideOf } from "./toolLayout";
 
 /** Built-in tool windows, and `view:<container>` for extensions' view containers. */
-export type ToolId = "project" | "commit" | "search" | "remote" | "extensions" | "debug" | `view:${string}`;
+export type ToolId = "project" | "commit" | "search" | "remote" | "extensions" | "debug" | "testing" | "chat" | `view:${string}`;
 export type BottomTool = "terminal" | "output" | "debug";
 
 export interface EditorTab {
