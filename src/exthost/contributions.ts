@@ -217,8 +217,8 @@ export function menuItems(
     if (ga !== gb) return ga === "navigation" ? -1 : gb === "navigation" ? 1 : ga.localeCompare(gb);
     return orderOf(a) - orderOf(b);
   });
-  // Title bars show `navigation` inline; tree items show the `inline` group inline.
-  const inlineGroup = menu === "view/title" ? "navigation" : "inline";
+  // Title bars (`view/title`, `scm/title`, ...) show `navigation` inline; items show the `inline` group.
+  const inlineGroup = menu.endsWith("/title") ? "navigation" : "inline";
   const inline = sorted.filter((i) => groupOf(i) === inlineGroup);
   const groups = new Map<string, MenuItem[]>();
   for (const item of sorted.filter((i) => groupOf(i) !== inlineGroup)) {

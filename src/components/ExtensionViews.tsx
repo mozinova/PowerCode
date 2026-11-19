@@ -30,14 +30,14 @@ import { tooltipProps } from "./Tooltip";
 import { ToolWindowHeader } from "./ui";
 import { WebviewAnchor } from "./WebviewFrame";
 
-function execute(command: string, args: unknown[] = []) {
+export function execute(command: string, args: unknown[] = []) {
   rpc.request("commands/execute", { command, args }).catch((e) =>
     notify("error", "Command failed", e instanceof Error ? e.message : String(e)),
   );
 }
 
 /** Re-renders when context keys change, so `when` clauses are re-evaluated. */
-function useWhenContext() {
+export function useWhenContext() {
   useContextKeys((s) => s.keys);
   useWorkspace((s) => s.root);
 }
@@ -55,7 +55,7 @@ export function useVisibleContainers(): ViewContainer[] {
 
 // ---- Actions -------------------------------------------------------------------------
 
-function ActionButton({ contributions, item, args }: { contributions: Contributions; item: MenuItem; args: unknown[] }) {
+export function ActionButton({ contributions, item, args }: { contributions: Contributions; item: MenuItem; args: unknown[] }) {
   const info = contributions.commands.get(item.command);
   const title = info?.title ?? item.command;
   return (
@@ -74,7 +74,7 @@ function ActionButton({ contributions, item, args }: { contributions: Contributi
   );
 }
 
-function menuEntries(contributions: Contributions, groups: MenuItem[][], args: unknown[]): MenuEntry[] {
+export function menuEntries(contributions: Contributions, groups: MenuItem[][], args: unknown[]): MenuEntry[] {
   const entries: MenuEntry[] = [];
   groups.forEach((group, i) => {
     if (i > 0) entries.push("separator");
@@ -86,7 +86,7 @@ function menuEntries(contributions: Contributions, groups: MenuItem[][], args: u
   return entries;
 }
 
-function MoreActions({ entries }: { entries: MenuEntry[] }) {
+export function MoreActions({ entries }: { entries: MenuEntry[] }) {
   const [open, setOpen] = useState(false);
   const anchorRef = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setOpen(false), []);

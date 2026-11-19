@@ -55,6 +55,7 @@ import { appendOutput, log, useExtensionHost, type ContributedCommand, type Stat
 import { contributions, registerViewHandlers, resetViews, setConfigurationContext } from "./views";
 import { registerCustomEditorHandlers, resetCustomEditors } from "./customEditors";
 import { registerDecorationHandlers, resetDecorations } from "./decorations";
+import { registerScmHandlers, resetScm } from "./scm";
 import { syncToHost as syncBreakpointsToHost } from "../debug/breakpoints";
 import { registerDebugHover } from "../debug/editor";
 import { registerDebugHandlers, resetDebug } from "../debug/model";
@@ -156,6 +157,7 @@ function forgetHostState() {
   useExtensionHost.setState({ statusItems: [], statusMessage: "", commands: [] });
   resetViews();
   resetDecorations();
+  resetScm();
   resetVirtualDocuments();
   resetCustomEditors();
   resetDebug();
@@ -742,6 +744,7 @@ async function closeHostTabs({ tabs }: { tabs: { group: number; id: string }[] }
 function registerHandlers() {
   registerWebviewHandlers();
   registerDecorationHandlers(rpc.onNotification);
+  registerScmHandlers(rpc.onNotification);
   registerVirtualDocumentHandlers(rpc.onNotification);
   registerDebugHandlers();
   registerCustomEditorHandlers();

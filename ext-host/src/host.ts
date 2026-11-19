@@ -13,6 +13,7 @@ import * as rpc from "./rpc";
 import * as views from "./views";
 import * as debug from "./debug";
 import * as authentication from "./authentication";
+import * as scm from "./scm";
 import * as files from "./files";
 import * as tabs from "./tabs";
 import * as tasks from "./tasks";
@@ -347,10 +348,14 @@ rpc.onRequest("commands/execute", async (params: { command: string; args?: unkno
   return Uri.isUri(result) ? { $uri: result.toString() } : result ?? null;
 });
 
-/** Arguments from the UI: `{ $uri }` objects become Uris again, `{ $treeItem }` the tree element. */
+/**
+ * Arguments from the UI: `{ $uri }` objects become Uris again, `{ $treeItem }` the
+ * tree element, `{ $scm }` a source control, resource group or resource state.
+ */
 function revive(arg: any): unknown {
   if (arg && typeof arg === "object" && typeof arg.$uri === "string") return Uri.parse(arg.$uri);
   if (arg && typeof arg === "object" && arg.$treeItem) return views.treeElement(arg.$treeItem);
+  if (arg && typeof arg === "object" && arg.$scm) return scm.scmElement(arg.$scm);
   return arg;
 }
 
@@ -432,6 +437,7 @@ files.listen();
 terminals.listen();
 tasks.listen();
 authentication.listen();
+scm.listen();
 rpc.listen();
 rpc.notify("ready", { pid: process.pid, node: process.version });
 

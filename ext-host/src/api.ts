@@ -17,6 +17,7 @@ import * as views from "./views";
 import * as decorations from "./decorations";
 import * as authentication from "./authentication";
 import * as files from "./files";
+import * as scm from "./scm";
 import * as tabs from "./tabs";
 import * as tasks from "./tasks";
 import * as terminals from "./terminals";
@@ -1121,7 +1122,12 @@ export function createApi(description: ExtensionDescription) {
       onDidStartTaskProcess: tasks.onDidStartTaskProcess.event,
       onDidEndTaskProcess: tasks.onDidEndTaskProcess.event,
     },
-    scm: {},
+    scm: {
+      createSourceControl: scm.createSourceControl,
+      get inputBox() {
+        return scm.firstInputBox();
+      },
+    },
     comments: {},
     tests: {},
     notebooks: {},

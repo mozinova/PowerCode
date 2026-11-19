@@ -25,6 +25,7 @@ import { GitGraphSection } from "./GitGraph";
 import { DropdownMenu, type MenuEntry } from "./Menu";
 import { tooltipProps } from "./Tooltip";
 import { IconButton, ToolWindowHeader } from "./ui";
+import { ExtensionSourceControls } from "./SourceControlView";
 
 function RowAction({ icon: Icon, title, onClick }: { icon: typeof Plus; title: string; onClick: () => void }) {
   return (
@@ -259,6 +260,8 @@ export function CommitView() {
           />
         </>
       )}
+      {/* Extensions' own source control (Perforce, SVN, ...), when any is registered. */}
+      {root && <ExtensionSourceControls />}
     </div>
   );
 }

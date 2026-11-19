@@ -57,8 +57,11 @@ and the surface generated from `@types/vscode` (`bun run gen:vscode-surface`).
 
 ## Source control, testing, comments
 
-- [ ] `scm.createSourceControl` (and `inputBox`) — not implemented (Source Control view
-      for extensions: GitLens, Perforce, SVN...).
+- [x] `scm.createSourceControl` (and `inputBox`) — shown in the Commit tool window under
+      the built-in Git. Missing: `quickDiffProvider` (gutter), `inputBox.validateInput`
+      messages in the UI, `statusBarCommands` in the status bar, `scm/inputBox` menu.
+      Extensions built on the `vscode.git` extension's API (GitLens) still need that
+      built-in extension.
 - [ ] `tests.createTestController` — not implemented (Testing view).
 - [ ] `comments.createCommentController` — not implemented (review comments, e.g.
       GitHub Pull Requests).
