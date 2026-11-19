@@ -18,6 +18,7 @@ import {
   Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -31,6 +32,7 @@ import { REVEAL_LABEL } from "../lib/platform";
 import { isSshPath } from "../lib/remote";
 import { GIT_COLORS, gitStateOf, useGit } from "../git/store";
 import { useWorkspace } from "../state/workspace";
+import { savedExplorer, saveExplorer } from "../state/session";
 import { FileIcon } from "./FileIcon";
 import { ContextMenu, type MenuEntry } from "./Menu";
 import { IconButton, ToolWindowHeader } from "./ui";
@@ -70,11 +72,23 @@ function useTree(root: string) {
     }
   }, []);
 
+  // The folders expanded last time come back expanded (see state/session.ts).
   useEffect(() => {
+    const saved = savedExplorer(root).expanded.filter((p) => isWithin(p, root));
     setChildren(new Map());
-    setExpanded(new Set([root]));
-    void load(root);
+    setExpanded(new Set([root, ...saved]));
+    for (const path of [root, ...saved]) void load(path);
   }, [root, load]);
+
+  // Skips the first run per folder: that is the restore above, not a change.
+  const restoredFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (restoredFor.current !== root) {
+      restoredFor.current = root;
+      return;
+    }
+    saveExplorer(root, { expanded: [...expanded].filter((p) => p !== root) });
+  }, [root, expanded]);
 
   const toggle = useCallback(
     (path: string, open?: boolean) => {
@@ -118,7 +132,10 @@ function useTree(root: string) {
     return result;
   }, [root, children, expanded]);
 
-  return { rows, load, toggle, refresh, collapseAll, afterRename };
+  /** Every expanded folder's entries are loaded: the tree has its full height. */
+  const ready = useMemo(() => [...expanded].every((p) => children.has(p)), [expanded, children]);
+
+  return { rows, ready, load, toggle, refresh, collapseAll, afterRename };
 }
 
 /**
@@ -240,7 +257,7 @@ type Editing =
   | { kind: "rename"; path: string };
 
 function Tree({ root }: { root: string }) {
-  const { rows, load, toggle, refresh, collapseAll, afterRename } = useTree(root);
+  const { rows, ready, load, toggle, refresh, collapseAll, afterRename } = useTree(root);
   const git = useGit();
 
   // Git operations (checkout, pull, rollback) can add and remove files.
@@ -260,6 +277,20 @@ function Tree({ root }: { root: string }) {
   const [editing, setEditing] = useState<Editing | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
+
+  // The scroll position of last time, applied once the restored folders are loaded
+  // (before that the tree is too short to scroll that far). Moving it yourself first wins.
+  // The tree is keyed by its folder, so this is read once per folder.
+  const [savedScroll] = useState(() => savedExplorer(root).scrollTop);
+  const pendingScroll = useRef<number | null>(savedScroll > 0 ? savedScroll : null);
+  useLayoutEffect(() => {
+    if (!ready || pendingScroll.current === null || !listRef.current) return;
+    listRef.current.scrollTop = pendingScroll.current;
+    pendingScroll.current = null;
+  }, [ready, rows]);
+  const cancelPendingScroll = () => {
+    pendingScroll.current = null;
+  };
 
   const startCreate = (dir: string, kind: "file" | "folder") => {
     toggle(dir, true);
@@ -430,7 +461,16 @@ function Tree({ root }: { root: string }) {
         ref={listRef}
         role="tree"
         tabIndex={0}
-        onKeyDown={onKeyDown}
+        onScroll={(e) => {
+          // Not while the restored position is still to be applied (the tree is loading).
+          if (pendingScroll.current === null) saveExplorer(root, { scrollTop: e.currentTarget.scrollTop });
+        }}
+        onWheel={cancelPendingScroll}
+        onPointerDown={cancelPendingScroll}
+        onKeyDown={(e) => {
+          cancelPendingScroll();
+          onKeyDown(e);
+        }}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
         onContextMenu={(e) => {

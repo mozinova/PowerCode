@@ -68,6 +68,11 @@ interface WorkspaceState {
 
   openFolder: (root: string) => void;
   closeFolder: () => void;
+  /** Replaces the editor groups with saved ones (tabs not dirty), focusing the `activeIndex`th. */
+  restoreGroups: (
+    groups: { tabs: { path: string; name: string; icon?: string }[]; activePath: string | null }[],
+    activeIndex: number,
+  ) => void;
   /** Opens (or focuses) a tab in the active group; `name` defaults to the file name, for page tabs it is their title. */
   openFile: (path: string, name?: string, icon?: string) => void;
   setTabIcon: (path: string, icon: string) => void;
@@ -138,6 +143,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   closeFolder: () => {
     const group = emptyGroup();
     set({ root: null, ...withGroups([group], group.id), cursor: null, status: null });
+  },
+  restoreGroups: (saved, activeIndex) => {
+    const groups = saved.map((g) => ({ ...emptyGroup(), tabs: g.tabs.map((t) => ({ ...t, dirty: false })), activePath: g.activePath }));
+    if (groups.length > 0) set(withGroups(groups, groups[Math.min(activeIndex, groups.length - 1)].id));
   },
 
   openFile: (path, name, icon) =>

@@ -26,6 +26,7 @@ import { attachDebugger } from "../debug/editor";
 import { editorOptions, followEditorSettings } from "../editor/options";
 import { uriToPath } from "../editor/uris";
 import { useWorkspace, type EditorGroup } from "../state/workspace";
+import { wasRestored } from "../state/session";
 import { DiffView } from "./DiffView";
 import { EditorTabs } from "./EditorTabs";
 import { ExtensionPage } from "./ExtensionPage";
@@ -217,6 +218,8 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     (document ? documentModel(document) : loadModel(activePath)).then(
       (model) => {
         if (cancelled) return;
+        // It opened: from now on a failure to open it is reported.
+        wasRestored(activePath);
         shownPathRef.current = activePath;
         editor.setModel(model);
         const viewState = viewStates.get(viewKey(group.id, activePath));
@@ -228,6 +231,8 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       async (e) => {
         if (cancelled) return;
         useWorkspace.getState().closeTab(activePath, group.id);
+        // A tab from the last session whose file was deleted or moved meanwhile just goes.
+        if (wasRestored(activePath)) return;
         await message(`Could not open the file:\n${errorMessage(e)}`, {
           title: "PowerCode",
           kind: "error",

@@ -23,6 +23,7 @@ import { refreshGit } from "./git/store";
 import { saveIfDirty } from "./editor/autosave";
 import { pickRemoteFolder } from "./state/folderPicker";
 import { enterFolder } from "./state/trust";
+import { restoreTabs } from "./state/session";
 import { useSettings } from "./state/settings";
 import { notify } from "./state/notifications";
 import { openPaths, useWorkspace } from "./state/workspace";
@@ -71,6 +72,8 @@ export async function openFolder(path?: string) {
   // Trust first: nothing may run in the folder before the user decides (see state/trust.ts).
   enterFolder(root);
   useWorkspace.getState().openFolder(root);
+  // The tabs it had last time.
+  restoreTabs(root);
   endSshSession(previous, root);
   try {
     localStorage.setItem(LAST_ROOT_KEY, root);

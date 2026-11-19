@@ -25,6 +25,7 @@ import { TrustDialog } from "./components/TrustDialog";
 import { WebviewLayer } from "./components/WebviewFrame";
 import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
+import { startSessionSaving } from "./state/session";
 import { startExtensionHost } from "./exthost/host";
 import { watchIndentationSettings } from "./editor/options";
 import { loadUserSettings } from "./settings/store";
@@ -137,6 +138,7 @@ export default function App() {
     startExtensionHost();
     startGitWatcher();
     startAutoSave();
+    startSessionSaving();
     // A folder given on the command line (or "Open with") wins over the last one.
     listenForOpenRequests();
     void takeStartupRequests().then(async (requests) => {
