@@ -113,6 +113,8 @@ export function useGitState(path: string, isDir = false): GitFileState | null {
 
 let inFlight = false;
 let queued = false;
+/** The folder the shown status was read for. */
+let statusRoot: string | null = null;
 
 export async function refreshGit() {
   if (inFlight) {
@@ -123,6 +125,7 @@ export async function refreshGit() {
   // In Restricted Mode git does not run: a repository's config can run commands (e.g. `core.fsmonitor`).
   if (!root || !isTrusted()) {
     useGit.setState({ status: null, ...EMPTY() });
+    statusRoot = null;
     return;
   }
   inFlight = true;
@@ -131,13 +134,16 @@ export async function refreshGit() {
     // Ignore a result for a project that was closed meanwhile.
     // Polling returns equal statuses most of the time; keep the old object so nothing re-renders.
     const unchanged = JSON.stringify(status) === JSON.stringify(useGit.getState().status);
+    if (useWorkspace.getState().root === root) statusRoot = root;
     if (useWorkspace.getState().root === root && !unchanged) {
       useGit.setState({ status, ...index(status) });
       // Extensions using the Git API (vscode.git, in the extension host) refresh too.
       if (rpc.isRunning()) rpc.notify("git/changed", {});
     }
   } catch {
-    if (useWorkspace.getState().root === root) {
+    // One failed `git status` (another git command busy, files mid-write) keeps the last
+    // colours of this folder: clearing them until the next poll made the tree flash.
+    if (useWorkspace.getState().root === root && statusRoot !== root) {
       useGit.setState({ status: null, ...EMPTY() });
     }
   } finally {

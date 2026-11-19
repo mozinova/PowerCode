@@ -60,6 +60,10 @@ function validateName(value: string, allowNested: boolean): string | null {
   return null;
 }
 
+function sameEntries(a: DirEntry[] | undefined, b: DirEntry[]): boolean {
+  return !!a && a.length === b.length && a.every((e, i) => e.path === b[i].path && e.name === b[i].name && e.isDir === b[i].isDir);
+}
+
 function useTree(root: string) {
   const [children, setChildren] = useState<Map<string, DirEntry[]>>(new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([root]));
@@ -67,9 +71,15 @@ function useTree(root: string) {
   const load = useCallback(async (path: string) => {
     try {
       const entries = await fsApi.listDir(path);
-      setChildren((prev) => new Map(prev).set(path, entries));
+      setChildren((prev) => {
+        // Listed again with nothing new (outside changes, Reload from Disk): no re-render.
+        if (sameEntries(prev.get(path), entries)) return prev;
+        return new Map(prev).set(path, entries);
+      });
     } catch {
-      setChildren((prev) => new Map(prev).set(path, []));
+      // A folder shown already keeps its entries when listing it again fails (a busy
+      // remote, a file being written): emptying it would make the tree flash.
+      setChildren((prev) => (prev.has(path) ? prev : new Map(prev).set(path, [])));
     }
   }, []);
 

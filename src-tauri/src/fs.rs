@@ -209,19 +209,21 @@ fn local_signature(path: &str) -> Option<String> {
 }
 
 /// `stat` of many paths on a remote in one round trip: signature by remote path.
-async fn remote_signatures(remotes: &Remotes, host: &str, paths: &[String]) -> std::collections::HashMap<String, String> {
+/// A remote that does not answer is an error, not "every path is gone": that would
+/// make the Project view list its folders again (and empty them) on every check.
+async fn remote_signatures(remotes: &Remotes, host: &str, paths: &[String]) -> CmdResult<std::collections::HashMap<String, String>> {
     let quoted: Vec<String> = paths.iter().map(|p| remote::quote(p)).collect();
     // Missing paths are just absent from the output; `true` keeps the exit status 0.
     let script = format!("stat -c '%y|%s|%n' -- {} 2>/dev/null; true", quoted.join(" "));
-    let output = Remotes::exec(remotes, host, script).await.unwrap_or_default();
-    String::from_utf8_lossy(&output)
+    let output = Remotes::exec(remotes, host, script).await?;
+    Ok(String::from_utf8_lossy(&output)
         .lines()
         .filter_map(|line| {
             let mut parts = line.splitn(3, '|');
             let (time, size, path) = (parts.next()?, parts.next()?, parts.next()?);
             Some((path.to_string(), format!("{time}:{size}")))
         })
-        .collect()
+        .collect())
 }
 
 /// Change signatures of `paths` (None where a path does not exist), to notice
@@ -241,7 +243,7 @@ pub async fn fs_signatures(remotes: State<'_, Remotes>, paths: Vec<String>) -> C
     }
     for (session, entries) in &groups {
         let list: Vec<String> = entries.iter().map(|(_, p)| p.clone()).collect();
-        let found = remote_signatures(&remotes, session, &list).await;
+        let found = remote_signatures(&remotes, session, &list).await?;
         for (index, path) in entries {
             result[*index] = found.get(path).cloned();
         }
