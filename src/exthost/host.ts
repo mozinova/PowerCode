@@ -59,6 +59,7 @@ import { registerScmHandlers, resetScm } from "./scm";
 import { registerTestingHandlers, resetTesting } from "./testing";
 import { registerCommentHandlers, resetComments } from "./comments";
 import { registerChatHandlers, resetChat } from "./chat";
+import { finishSignIn, registerGitHubAuthHandlers } from "./githubAuth";
 import { syncToHost as syncBreakpointsToHost } from "../debug/breakpoints";
 import { registerDebugHover } from "../debug/editor";
 import { registerDebugHandlers, resetDebug } from "../debug/model";
@@ -164,6 +165,8 @@ function forgetHostState() {
   resetTesting();
   resetComments();
   resetChat();
+  // A sign-in the stopped host asked for has nobody waiting for it.
+  finishSignIn(null);
   resetVirtualDocuments();
   resetCustomEditors();
   resetDebug();
@@ -754,6 +757,7 @@ function registerHandlers() {
   registerTestingHandlers(rpc.onNotification);
   registerCommentHandlers(rpc.onNotification);
   registerChatHandlers(rpc.onNotification);
+  registerGitHubAuthHandlers();
   registerVirtualDocumentHandlers(rpc.onNotification);
   registerDebugHandlers();
   registerCustomEditorHandlers();

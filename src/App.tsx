@@ -24,6 +24,7 @@ import { OutputPanel } from "./components/OutputPanel";
 import { Toasts } from "./components/Toasts";
 import { TooltipLayer } from "./components/Tooltip";
 import { TrustDialog } from "./components/TrustDialog";
+import { GitHubSignIn } from "./components/GitHubSignIn";
 import { WebviewLayer } from "./components/WebviewFrame";
 import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
@@ -210,6 +211,7 @@ export default function App() {
       <RemoteFolderPicker />
       <WebviewLayer />
       <TrustDialog />
+      <GitHubSignIn />
       <HostDialogs />
       <Toasts />
       <TooltipLayer />

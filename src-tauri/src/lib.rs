@@ -5,6 +5,7 @@ mod exthost;
 mod webview;
 mod fs;
 mod git;
+mod github_auth;
 mod profiles;
 mod remote;
 mod remote_exthost;
@@ -92,6 +93,11 @@ pub fn run() {
             extensions::extensions_cancel_install,
             extensions::extensions_read_file,
             cli::cli_take_pending,
+            github_auth::github_device_start,
+            github_auth::github_device_check,
+            github_auth::github_user,
+            github_auth::github_cli_token,
+            github_auth::github_git_credential,
             secrets::secrets_get,
             secrets::secrets_set,
             secrets::secrets_delete,

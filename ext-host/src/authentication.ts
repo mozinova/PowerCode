@@ -15,6 +15,8 @@ interface Registered {
   provider: any;
   supportsMultipleAccounts: boolean;
   subscription?: { dispose(): unknown };
+  /** PowerCode's own provider: an extension registering the same id replaces it. */
+  builtin?: boolean;
 }
 
 interface Account {
@@ -74,17 +76,43 @@ function forget(providerId: string, account: Account) {
 // ---- Providers ---------------------------------------------------------------------
 
 export function registerAuthenticationProvider(id: string, label: string, provider: any, options?: { supportsMultipleAccounts?: boolean }) {
-  if (providers.has(id)) throw new Error(`An authentication provider with id '${id}' is already registered.`);
+  const replaced = providers.get(id);
+  if (replaced && !replaced.builtin) throw new Error(`An authentication provider with id '${id}' is already registered.`);
   const entry: Registered = { id, label, provider, supportsMultipleAccounts: options?.supportsMultipleAccounts === true };
   entry.subscription = provider.onDidChangeSessions?.(() => onDidChangeSessions.fire({ provider: { id, label } }));
   providers.set(id, entry);
   registered.fire(id);
   return new Disposable(() => {
     entry.subscription?.dispose?.();
-    if (providers.get(id) === entry) providers.delete(id);
+    if (providers.get(id) === entry) {
+      // The built-in provider it replaced comes back.
+      if (replaced?.builtin) providers.set(id, replaced);
+      else providers.delete(id);
+    }
     onDidChangeSessions.fire({ provider: { id, label } });
   });
 }
+
+// ---- PowerCode's own GitHub provider --------------------------------------------------------
+
+/**
+ * `github`, which VS Code ships as a built-in extension: sign-in and the tokens live in
+ * the UI (src/exthost/githubAuth.ts), on the user's machine even when this host is remote.
+ */
+const githubChanged = new EventEmitter<unknown>();
+providers.set("github", {
+  id: "github",
+  label: "GitHub",
+  builtin: true,
+  supportsMultipleAccounts: false,
+  provider: {
+    onDidChangeSessions: githubChanged.event,
+    getSessions: (scopes?: readonly string[]) => rpc.request<any[]>("githubAuth/getSessions", { scopes: scopes ?? null }),
+    createSession: (scopes: readonly string[]) => rpc.request<any>("githubAuth/createSession", { scopes }),
+    removeSession: (sessionId: string) => rpc.request("githubAuth/removeSession", { id: sessionId }),
+  },
+});
+githubChanged.event(() => onDidChangeSessions.fire({ provider: { id: "github", label: "GitHub" } }));
 
 const PROVIDER_WAIT_MS = 5000;
 
@@ -129,7 +157,15 @@ async function consent(message: string, detail?: string): Promise<boolean> {
 const sameScopes = (a: readonly string[], b: readonly string[]) => [...a].sort().join(" ") === [...b].sort().join(" ");
 
 export async function getSession(extensionId: string, providerId: string, scopes: readonly string[], options: any = {}) {
-  const provider = await providerFor(providerId);
+  let provider: Registered;
+  try {
+    provider = await providerFor(providerId);
+  } catch (e) {
+    // Without the provider, a silent lookup finds no session (the extension goes on signed out);
+    // only an actual sign-in request fails.
+    if (!options.createIfNone && !options.forceNewSession) return undefined;
+    throw e;
+  }
   const name = extensionName(extensionId);
   const account: Account | undefined = options.account;
   const sessions: any[] = ((await provider.provider.getSessions(scopes, { account })) ?? []).filter(
@@ -159,7 +195,8 @@ export async function getSession(extensionId: string, providerId: string, scopes
 }
 
 export async function getAccounts(providerId: string): Promise<Account[]> {
-  const provider = await providerFor(providerId);
+  const provider = await providerFor(providerId).catch(() => undefined);
+  if (!provider) return [];
   const sessions: any[] = (await provider.provider.getSessions(undefined, {})) ?? [];
   const byId = new Map(sessions.map((s) => [s.account.id, { id: s.account.id, label: s.account.label }]));
   return [...byId.values()];
@@ -168,6 +205,7 @@ export async function getAccounts(providerId: string): Promise<Account[]> {
 // ---- The UI's Accounts commands -----------------------------------------------------------
 
 export function listen() {
+  rpc.onNotification("githubAuth/changed", () => githubChanged.fire(undefined));
   rpc.onRequest("auth/accounts", async () => {
     const access = readAccess();
     const result: { providerId: string; providerLabel: string; accountId: string; accountLabel: string; extensions: string[] }[] = [];

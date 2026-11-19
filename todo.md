@@ -48,10 +48,12 @@ and the surface generated from `@types/vscode` (`bun run gen:vscode-surface`).
 
 ## Authentication
 
-- [ ] Built-in `github` and `microsoft` providers (VS Code ships them as built-in
-      extensions; most sign-ins use them). Options: a `github` provider using
-      `gh auth token` / Git Credential Manager / a personal access token, or an OAuth
-      app owned by PowerCode (device flow).
+- [x] Built-in `github` provider: browser sign-in (device flow, PowerCode's OAuth App),
+      GitHub CLI token, Git Credential Manager, or a personal access token; tokens in the
+      encrypted secret storage, scopes checked against the API. A silent `getSession` for a
+      provider that does not exist now returns `undefined` instead of failing activation.
+- [ ] `github-enterprise` provider (same flow, needs an OAuth App on each server, or a token).
+- [ ] Built-in `microsoft` provider (MSAL / Azure sign-in).
 - [ ] "Sign in requested" badge: `getSession` without `createIfNone` for an account the
       extension may not use returns `undefined` with no way to grant access later.
 
