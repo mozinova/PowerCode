@@ -3455,7 +3455,7 @@ dependencies = [
 
 [[package]]
 name = "powercode"
-version = "0.1.84"
+version = "0.1.85"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -3477,6 +3477,7 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tokio",
  "trash",
+ "windows",
  "windows-sys 0.61.2",
  "winreg 0.56.0",
  "zip",

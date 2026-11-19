@@ -6,6 +6,7 @@ mod webview;
 mod fs;
 mod git;
 mod github_auth;
+mod jumplist;
 mod profiles;
 mod remote;
 mod remote_exthost;
@@ -17,6 +18,8 @@ mod wsl;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before any window: the taskbar groups it with the Start menu shortcut and its jump list.
+    jumplist::set_app_id();
     let args: Vec<String> = std::env::args().collect();
     let mut builder = tauri::Builder::default();
     // A later `powercode <path>` hands its paths to the running window and exits; one
@@ -102,6 +105,7 @@ pub fn run() {
             cli::cli_take_pending,
             cli::cli_launch_info,
             cli::cli_new_window,
+            jumplist::system_update_jump_list,
             github_auth::github_device_start,
             github_auth::github_device_check,
             github_auth::github_user,

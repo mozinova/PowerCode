@@ -105,6 +105,10 @@ fn resolve(path: &str, cwd: &Path) -> PathBuf {
 }
 
 fn request(path: &str, line: Option<u32>, column: Option<u32>, cwd: &Path) -> OpenRequest {
+    // A folder on an SSH host (e.g. a recent project in the jump list): opened as it is.
+    if path.starts_with("ssh://") {
+        return OpenRequest { path: path.to_string(), line: None, column: None, is_dir: true, exists: true };
+    }
     let resolved = resolve(path, cwd);
     let metadata = std::fs::metadata(&resolved).ok();
     OpenRequest {

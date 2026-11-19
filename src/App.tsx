@@ -30,6 +30,7 @@ import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
 import { startExternalChangeWatcher } from "./editor/externalChanges";
 import { startSessionSaving } from "./state/session";
+import { startWindowIdentity } from "./windowIdentity";
 import { startExtensionHost } from "./exthost/host";
 import { watchIndentationSettings } from "./editor/options";
 import { loadUserSettings } from "./settings/store";
@@ -147,6 +148,7 @@ export default function App() {
     startAutoSave();
     startExternalChangeWatcher();
     startSessionSaving();
+    startWindowIdentity();
     // A folder given on the command line (or "Open with") wins over the last one.
     listenForOpenRequests();
     void Promise.all([takeStartupRequests(), isNewWindow()]).then(async ([requests, newWindow]) => {
