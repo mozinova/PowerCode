@@ -1,4 +1,5 @@
 import { FitAddon } from "@xterm/addon-fit";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { Terminal, type ITheme } from "@xterm/xterm";
 import { create } from "zustand";
 import { terminalApi, type TerminalProfile, type TerminalProgram } from "../lib/ipc";
@@ -96,6 +97,7 @@ export class TerminalSession {
     this.title = title;
     this.host.style.height = "100%";
     this.term.loadAddon(this.fit);
+    this.term.attachCustomKeyEventHandler((e) => this.clipboardKey(e));
     // After the creator registered its listeners.
     queueMicrotask(() => void this.start());
   }
@@ -121,6 +123,61 @@ export class TerminalSession {
     }
     this.layout();
     this.term.focus();
+  }
+
+  hasSelection() {
+    return this.term.hasSelection();
+  }
+
+  /** Copies the selected text; false when nothing is selected. */
+  copySelection(): boolean {
+    const text = this.term.getSelection();
+    if (!text) return false;
+    void writeText(text).catch(() => navigator.clipboard.writeText(text));
+    return true;
+  }
+
+  /** Pastes the clipboard's text as typed input (bracketed for shells that ask for it). */
+  async paste() {
+    const text = await readText().catch(() => navigator.clipboard.readText().catch(() => ""));
+    if (text) this.term.paste(text);
+    this.term.focus();
+  }
+
+  selectAll() {
+    this.term.selectAll();
+  }
+
+  /** Clears the scrollback and the screen, keeping the prompt line. */
+  clear() {
+    this.term.clear();
+    this.term.focus();
+  }
+
+  /**
+   * The clipboard keys, as in VS Code's terminal: Ctrl+Shift+C / Ctrl+Insert copy,
+   * Ctrl+Shift+V / Shift+Insert paste; on Windows also Ctrl+C with a selection (without
+   * one it interrupts, as always) and Ctrl+V. Returns false for the keys it handled.
+   */
+  private clipboardKey(e: KeyboardEvent): boolean {
+    if (e.type !== "keydown") return true;
+    const key = e.key.toLowerCase();
+    const ctrl = e.ctrlKey || e.metaKey;
+    const windows = navigator.userAgent.includes("Windows");
+    const copy = (ctrl && e.shiftKey && key === "c") || (ctrl && !e.shiftKey && key === "insert") || (windows && ctrl && !e.shiftKey && !e.altKey && key === "c" && this.term.hasSelection());
+    const paste = (ctrl && e.shiftKey && key === "v") || (e.shiftKey && !ctrl && key === "insert") || (windows && ctrl && !e.shiftKey && !e.altKey && key === "v");
+    if (copy) {
+      this.copySelection();
+      this.term.clearSelection();
+    } else if (paste) {
+      void this.paste();
+    } else {
+      return true;
+    }
+    // Not the browser's own paste as well, nor the app's shortcuts.
+    e.preventDefault();
+    e.stopPropagation();
+    return false;
   }
 
   /** Output of an extension's pseudoterminal. */

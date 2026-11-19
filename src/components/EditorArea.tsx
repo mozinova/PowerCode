@@ -1,5 +1,5 @@
 import { message } from "@tauri-apps/plugin-dialog";
-import { Fragment, useEffect, useRef } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Group as PanelGroup, Panel, Separator } from "react-resizable-panels";
 import { monaco } from "../editor/monaco";
 import { loadModel, modelPath } from "../editor/models";
@@ -24,6 +24,7 @@ import { CustomEditorView } from "./CustomEditorView";
 import { attachGitGutter } from "../git/gutter";
 import { attachDebugger } from "../debug/editor";
 import { attachComments } from "../editor/comments";
+import { useEditorContextMenu } from "../editor/contextMenu";
 import { editorOptions, followEditorSettings } from "../editor/options";
 import { uriToPath } from "../editor/uris";
 import { useWorkspace, type EditorGroup } from "../state/workspace";
@@ -146,6 +147,9 @@ function applyReveal(editor: monaco.editor.ICodeEditor, group: number, path: str
 function MonacoHost({ group }: { group: EditorGroup }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  // The same editor as state, for the right-click menu's hook.
+  const [editorInstance, setEditorInstance] = useState<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const contextMenu = useEditorContextMenu(editorInstance);
   const shownPathRef = useRef<string | null>(null);
   const activePath = group.activePath;
   const focused = useWorkspace((s) => s.activeGroup === group.id);
@@ -164,11 +168,14 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       // Breakpoints and the execution line live in the glyph margin.
       glyphMargin: true,
       fixedOverflowWidgets: true,
+      // PowerCode's own menu (editor/contextMenu.tsx): Monaco's does not show in the app's webview.
+      contextmenu: false,
       // Extension grammars colour code through semantic tokens (see editor/textmate.ts).
       // A global option: it also applies to the diff editors.
       "semanticHighlighting.enabled": true,
     });
     editorRef.current = editor;
+    setEditorInstance(editor);
     editors.set(group.id, editor);
     const gutter = attachGitGutter(editor);
     const debugging = attachDebugger(editor);
@@ -192,6 +199,7 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       if (editors.get(group.id) === editor) editors.delete(group.id);
       editor.dispose();
       editorRef.current = null;
+      setEditorInstance(null);
     };
   }, [group.id]);
 
@@ -261,7 +269,12 @@ function MonacoHost({ group }: { group: EditorGroup }) {
     for (const key of viewStates.keys()) if (key.startsWith(prefix) && !open.has(key)) viewStates.delete(key);
   }, [group.tabs, group.id]);
 
-  return <div ref={containerRef} className="absolute inset-0" />;
+  return (
+    <>
+      <div ref={containerRef} className="absolute inset-0" />
+      {contextMenu}
+    </>
+  );
 }
 
 function EditorGroupView({ group, split }: { group: EditorGroup; split: boolean }) {

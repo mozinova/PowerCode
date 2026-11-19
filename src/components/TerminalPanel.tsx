@@ -1,4 +1,4 @@
-import { ChevronDown, Minus, Plus, X } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Copy, Eraser, Minus, Plus, TextSelect, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { remoteOf } from "../lib/remote";
 import { useWorkspace } from "../state/workspace";
@@ -11,7 +11,7 @@ import {
   TERMINAL_BACKGROUND,
   useTerminals,
 } from "../terminal/sessions";
-import { DropdownMenu, type MenuEntry } from "./Menu";
+import { ContextMenu, DropdownMenu, type MenuEntry } from "./Menu";
 import { IconButton } from "./ui";
 import { tooltipProps } from "./Tooltip";
 
@@ -52,6 +52,28 @@ export function TerminalPanel() {
   const root = useWorkspace((s) => s.root);
   const toggleBottomTool = useWorkspace((s) => s.toggleBottomTool);
   const containerRef = useRef<HTMLDivElement>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const closeMenu = useCallback(() => setMenu(null), []);
+
+  const menuItems: MenuEntry[] = active
+    ? [
+        { label: "Copy", icon: Copy, shortcut: "Ctrl+Shift+C", disabled: !active.hasSelection(), action: () => active.copySelection() },
+        { label: "Paste", icon: ClipboardPaste, shortcut: "Ctrl+Shift+V", action: () => void active.paste() },
+        { label: "Select All", icon: TextSelect, action: () => active.selectAll() },
+        "separator",
+        { label: "Clear Terminal", icon: Eraser, action: () => active.clear() },
+        "separator",
+        { label: "New Terminal", icon: Plus, action: () => newTerminal(root) },
+        {
+          label: "Kill Terminal",
+          icon: Trash2,
+          action: () => {
+            closeTerminal(active);
+            if (useTerminals.getState().sessions.length === 0) toggleBottomTool("terminal");
+          },
+        },
+      ]
+    : [];
 
   // Opening the tool window with no sessions starts one, like IntelliJ, once the
   // profiles are known so it uses the chosen default.
@@ -119,7 +141,16 @@ export function TerminalPanel() {
         <div className="flex-1" />
         <IconButton icon={Minus} title="Hide" onClick={() => toggleBottomTool("terminal")} className="size-7" />
       </div>
-      <div ref={containerRef} className="min-h-0 flex-1" onClick={() => active?.focus()} />
+      <div
+        ref={containerRef}
+        className="min-h-0 flex-1"
+        onClick={() => active?.focus()}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          if (active) setMenu({ x: e.clientX, y: e.clientY });
+        }}
+      />
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />}
     </div>
   );
 }
