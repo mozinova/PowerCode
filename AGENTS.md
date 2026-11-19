@@ -48,6 +48,7 @@ are released; macOS builds but is not released. Package manager: **bun**.
 | `src-tauri/src/` | Rust commands: `fs`, `git`, `terminal` (portable-pty), `search`, `extensions` (Open VSX), `exthost` (spawns the host), `remote` + `wsl` + `remote_exthost` (SSH/WSL), `secrets` (AES-GCM + OS keyring), `github_auth` (device flow), `webview` (webview protocol), `cli`, `system`. Unit tests live in each file (`#[cfg(test)]`). |
 | `todo.md` | VS Code API gaps. Tick items you implement, note what is still missing. |
 | `.github/workflows/release.yml` | Release build on tag push. |
+| `.github/workflows/windows-build.yml` | Windows build on branch push, as artifacts only. |
 
 ### How the pieces talk
 
@@ -119,6 +120,8 @@ that type checks could not.
 - Tags are `vX.Y.Z`. Pushing one runs `release.yml`, which builds Windows (.exe,
   .msi) and Linux (.deb, .rpm, .AppImage) and attaches them to a **draft** release.
   The maintainer publishes it.
+- Every push to a branch runs `windows-build.yml`: Windows installers only, kept
+  as workflow artifacts for 14 days, never released. Markdown-only pushes skip it.
 - Commit messages: `feat: ... (vX.Y.Z)` / `fix: ...` / `chore: ...`, with a short
   body listing the user-visible changes. Reference issues as `#N`; use "Fixes #N"
   only when the maintainer wants the issue closed. Agents add their own
