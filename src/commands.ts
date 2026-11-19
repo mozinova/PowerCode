@@ -23,7 +23,7 @@ import { checkForUpdates, useExtensions } from "./extensions/runtime";
 import { restartExtensionHost, showOutput } from "./exthost/host";
 import { openUserSettings } from "./exthost/settings";
 import { showTrustDialog } from "./state/trust";
-import { installShellCommand, registerOpenWith, uninstallShellCommand, unregisterOpenWith } from "./cli";
+import { installShellCommand, openNewWindow, registerOpenWith, uninstallShellCommand, unregisterOpenWith } from "./cli";
 
 const IS_MAC = navigator.userAgent.includes("Mac");
 import * as hostRpc from "./exthost/rpc";
@@ -83,6 +83,7 @@ const closePaths = (filter: (t: { dirty: boolean }) => boolean) =>
 
 export const COMMANDS: Command[] = [
   { id: "window.reload", category: "Developer", label: "Reload Window", run: reloadWindow },
+  { id: "file.newWindow", category: "File", label: "New Window", run: () => void openNewWindow() },
   { id: "file.openFolder", category: "File", label: "Open Folder…", shortcut: "Ctrl+O", run: () => openFolder() },
   { id: "file.closeFolder", category: "File", label: "Close Folder", when: hasFolder, run: () => void closeFolder() },
   { id: "file.save", category: "File", label: "Save", shortcut: "Ctrl+S", when: hasTabs, run: saveActive },

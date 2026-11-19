@@ -1,6 +1,7 @@
-//! The command line: `powercode [paths...] [-g file:line[:column]]`. Paths open
+//! The command line: `powercode [-n] [paths...] [-g file:line[:column]]`. Paths open
 //! in the running window when there is one (see the single-instance plugin in
-//! lib.rs), else in the window being started.
+//! lib.rs), else in the window being started. `-n` / `--new-window` starts another
+//! window: each window is its own process (own extension host, terminals, remotes).
 
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -22,14 +23,60 @@ pub struct OpenRequest {
 pub struct CliState {
     pending: Mutex<Vec<OpenRequest>>,
     ready: Mutex<bool>,
+    /// Started as an additional window: it opens empty, not the last folder.
+    new_window: bool,
 }
 
 impl CliState {
     pub fn from_process() -> Self {
         let args: Vec<String> = std::env::args().collect();
         let cwd = std::env::current_dir().unwrap_or_default();
-        CliState { pending: Mutex::new(parse_args(&args, &cwd)), ready: Mutex::new(false) }
+        CliState { pending: Mutex::new(parse_args(&args, &cwd)), ready: Mutex::new(false), new_window: wants_new_window(&args) }
     }
+}
+
+/// The option that starts another window instead of using the running one.
+pub const NEW_WINDOW_FLAG: &str = "--new-window";
+
+/// Whether `args` ask for a window of their own (`-n` / `--new-window`, before any `--`).
+pub fn wants_new_window(args: &[String]) -> bool {
+    args.iter().skip(1).take_while(|a| a.as_str() != "--").any(|a| a == NEW_WINDOW_FLAG || a == "-n")
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchInfo {
+    new_window: bool,
+}
+
+/// How this window was started.
+#[tauri::command]
+pub fn cli_launch_info(state: State<'_, CliState>) -> LaunchInfo {
+    LaunchInfo { new_window: state.new_window }
+}
+
+/// Starts another PowerCode window (a new process), empty or with `path` open.
+#[tauri::command]
+pub fn cli_new_window(path: Option<String>) -> crate::error::CmdResult<()> {
+    // An AppImage runs from a mount that goes away with its process: start the image itself.
+    let program = match std::env::var_os("APPIMAGE") {
+        Some(image) => PathBuf::from(image),
+        None => std::env::current_exe().map_err(crate::error::err)?,
+    };
+    let mut command = std::process::Command::new(program);
+    command.arg(NEW_WINDOW_FLAG);
+    if let Some(path) = path {
+        command.arg("--").arg(path);
+    }
+    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Its own process group, with no console: it outlives this window.
+        command.creation_flags(0x0000_0200 | 0x0800_0000);
+    }
+    command.spawn().map_err(crate::error::err)?;
+    Ok(())
 }
 
 /// `file:12` or `file:12:5` (the drive colon of `C:\x` is not a position).
@@ -122,6 +169,19 @@ pub fn deliver(app: &AppHandle, requests: Vec<OpenRequest>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_window_option() {
+        let a = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(wants_new_window(&a(&["powercode", "-n"])));
+        assert!(wants_new_window(&a(&["powercode", "--new-window", "--", "C:/work"])));
+        assert!(!wants_new_window(&a(&["powercode", "C:/work"])));
+        // After `--` it is a path named `-n`, not the option.
+        assert!(!wants_new_window(&a(&["powercode", "--", "-n"])));
+        // The option opens nothing itself; the paths after it still do.
+        let cwd = std::env::temp_dir();
+        assert_eq!(parse_args(&a(&["powercode", "--new-window", "--", "x"]), &cwd).len(), 1);
+    }
 
     fn args(list: &[&str]) -> Vec<String> {
         std::iter::once("powercode").chain(list.iter().copied()).map(String::from).collect()

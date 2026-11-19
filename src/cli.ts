@@ -17,6 +17,20 @@ export interface OpenRequest {
   exists: boolean;
 }
 
+/** Whether this window was started as an additional one (New Window, `powercode -n`). */
+export function isNewWindow(): Promise<boolean> {
+  return invoke<{ newWindow: boolean }>("cli_launch_info").then((info) => info.newWindow, () => false);
+}
+
+/** Opens another PowerCode window (its own process), empty or with `path` (a folder) open. */
+export async function openNewWindow(path?: string) {
+  try {
+    await invoke("cli_new_window", { path: path ?? null });
+  } catch (e) {
+    notify("error", "Could not open a new window", String(e));
+  }
+}
+
 /** The paths the app was started with (the backend queues them until asked). */
 export function takeStartupRequests(): Promise<OpenRequest[]> {
   return invoke<OpenRequest[]>("cli_take_pending").catch(() => []);
@@ -38,13 +52,17 @@ export function openFiles(requests: OpenRequest[]) {
 }
 
 /**
- * A later `powercode <path>`: a folder becomes the open folder (unless it is
- * already open or inside it), files open in tabs of this window.
+ * A later `powercode <path>`, handed to this (the first) window. A folder opens here
+ * when no folder is open, in a new window when another one is (as `code <folder>`
+ * does); the open folder or one inside it stays here. Files open in tabs here.
  */
 async function handle(requests: OpenRequest[]) {
   const folder = requests.find((r) => r.isDir);
   const root = useWorkspace.getState().root;
-  if (folder && !(root && isWithin(pathKey(folder.path), pathKey(root)))) await openFolder(folder.path);
+  if (folder && !(root && isWithin(pathKey(folder.path), pathKey(root)))) {
+    if (root) await openNewWindow(folder.path);
+    else await openFolder(folder.path);
+  }
   openFiles(requests);
 }
 

@@ -17,11 +17,16 @@ mod wsl;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        // First, so a second `powercode <path>` hands its paths to this window and exits.
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+    let args: Vec<String> = std::env::args().collect();
+    let mut builder = tauri::Builder::default();
+    // A later `powercode <path>` hands its paths to the running window and exits; one
+    // started with `--new-window` (New Window, `powercode -n`) is a window of its own.
+    if !cli::wants_new_window(&args) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             cli::deliver(app, cli::parse_args(&argv, std::path::Path::new(&cwd)));
-        }))
+        }));
+    }
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -95,6 +100,8 @@ pub fn run() {
             extensions::extensions_cancel_install,
             extensions::extensions_read_file,
             cli::cli_take_pending,
+            cli::cli_launch_info,
+            cli::cli_new_window,
             github_auth::github_device_start,
             github_auth::github_device_check,
             github_auth::github_user,

@@ -3,6 +3,7 @@
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
+  AppWindow,
   ChevronDown,
   Copy,
   Folder,
@@ -22,6 +23,7 @@ import { closeActiveTab, closeFolder, closeRemoteConnection, openFolder, openRec
 import { basename } from "../lib/paths";
 import { pathKey } from "../lib/platform";
 import { useRecentProjects } from "../state/recentProjects";
+import { openNewWindow } from "../cli";
 import { remoteLabel, remoteOf } from "../lib/remote";
 import * as hostRpc from "../exthost/rpc";
 import { useExtensionHost, type StatusItem as ExtensionStatusItem } from "../exthost/state";
@@ -47,6 +49,8 @@ function MainMenu() {
   const close = useCallback(() => setOpen(false), []);
 
   const items: MenuEntry[] = [
+    { label: "New Window", action: () => void openNewWindow() },
+    "separator",
     { label: "Open Folder…", shortcut: "Ctrl+O", action: () => void openFolder() },
     { label: "Close Folder", action: () => void closeFolder(), disabled: !hasRoot },
     "separator",
@@ -156,6 +160,7 @@ function ProjectSelector() {
     })),
     ...(recent.length > 0 ? ["separator" as const] : []),
     { label: "Browse…", icon: FolderOpen, shortcut: "Ctrl+O", action: () => void openFolder() },
+    { label: "New Window", icon: AppWindow, action: () => void openNewWindow() },
   ];
 
   return (

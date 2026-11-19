@@ -1,7 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { closeActiveTab, lastRoot, openFolder, openSettings, saveActive } from "./actions";
-import { listenForOpenRequests, openFiles, takeStartupRequests } from "./cli";
+import { isNewWindow, listenForOpenRequests, openFiles, takeStartupRequests } from "./cli";
 import { MainToolbar, StatusBar } from "./components/Chrome";
 import { EditorArea } from "./components/EditorArea";
 import { CommitView } from "./components/CommitView";
@@ -149,11 +149,12 @@ export default function App() {
     startSessionSaving();
     // A folder given on the command line (or "Open with") wins over the last one.
     listenForOpenRequests();
-    void takeStartupRequests().then(async (requests) => {
+    void Promise.all([takeStartupRequests(), isNewWindow()]).then(async ([requests, newWindow]) => {
       const folder = requests.find((r) => r.isDir);
       const previous = lastRoot();
       if (folder) await openFolder(folder.path);
-      else if (previous) await openFolder(previous);
+      // A new window starts empty; the first one reopens the last folder.
+      else if (previous && !newWindow) await openFolder(previous);
       openFiles(requests);
     });
   }, []);
