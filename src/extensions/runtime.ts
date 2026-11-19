@@ -10,7 +10,7 @@ import { POWERCODE_DARK, applyEditorTheme, type EditorTheme } from "../editor/th
 import { joinPath } from "../lib/paths";
 import { track } from "../state/activity";
 import { errorMessage, extensionsApi, INSTALL_CANCELLED, type DownloadProgress, type InstalledExtension } from "../lib/ipc";
-import { notify } from "../state/notifications";
+import { ask, notify } from "../state/notifications";
 import { useSettings } from "../state/settings";
 import {
   BUILTIN_ICON_THEME_ID,
@@ -322,6 +322,22 @@ async function loadExtensions() {
   setInstalled(installed);
   await setEditorTheme(storedThemeId()).catch(() => setEditorTheme(BUILTIN_THEME.id));
   await setIconTheme(storedIconThemeId()).catch(() => setIconTheme(BUILTIN_ICON_THEME_ID));
+  offerMissingDependencies();
+}
+
+/** Extensions installed without what they depend on (e.g. before PowerCode installed dependencies): offer them. */
+function offerMissingDependencies() {
+  const missing = missingDependencies();
+  if (missing.length === 0) return;
+  const details = missing.map((m) => `${m.id} (needed by ${m.neededBy.join(", ")})`).join(", ");
+  void ask("info", "Some extensions need others that are not installed", details, ["Install"]).then(async (choice) => {
+    if (choice !== 0) return;
+    for (const { id } of missing) {
+      const dot = id.indexOf(".");
+      if (dot <= 0 || isInstalled(id)) continue;
+      await installExtension(id.slice(0, dot), id.slice(dot + 1)).catch((e) => notify("error", `Could not install ${id}`, errorMessage(e)));
+    }
+  });
 }
 
 function setInstalling(id: string, progress: InstallProgress | null) {
@@ -334,7 +350,7 @@ function setInstalling(id: string, progress: InstallProgress | null) {
 }
 
 /** Installs (or updates) from Open VSX; null when the user cancelled the download. */
-export async function installExtension(namespace: string, name: string): Promise<InstalledExtension | null> {
+export async function installExtension(namespace: string, name: string, dependencyOf?: Set<string>): Promise<InstalledExtension | null> {
   const key = `${namespace}.${name}`.toLowerCase();
   setInstalling(key, { downloaded: 0, total: null });
   let ext: InstalledExtension;
@@ -349,7 +365,63 @@ export async function installExtension(namespace: string, name: string): Promise
     setInstalling(key, null);
   }
   await finishInstall(ext);
+  // While installing another extension's dependencies, that installation goes on through them.
+  if (dependencyOf) await installDependencies(ext, dependencyOf);
+  else await installDependencies(ext);
   return ext;
+}
+
+/** The extensions `ext` needs (`extensionDependencies`) or bundles (`extensionPack`), by id. */
+function dependenciesOf(ext: InstalledExtension): string[] {
+  const manifest = ext.manifest as InstalledExtension["manifest"] & { extensionDependencies?: unknown; extensionPack?: unknown };
+  const list = (value: unknown) => (Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : []);
+  return [...new Set([...list(manifest.extensionDependencies), ...list(manifest.extensionPack)].map((id) => id.toLowerCase()))];
+}
+
+/** Extensions PowerCode provides itself (the Git API, in the extension host): never missing. */
+const BUILTIN_EXTENSION_IDS = ["vscode.git", "vscode.git-base"];
+
+const isInstalled = (id: string) => {
+  const { installed, disabled } = useExtensions.getState();
+  return BUILTIN_EXTENSION_IDS.includes(id) || installed.some((e) => e.id === id) || disabled.some((e) => e.id === id);
+};
+
+/** Dependencies of the installed extensions that are not installed, with who needs them. */
+export function missingDependencies(): { id: string; neededBy: string[] }[] {
+  const missing = new Map<string, string[]>();
+  for (const ext of useExtensions.getState().installed) {
+    for (const id of dependenciesOf(ext)) {
+      if (!isInstalled(id)) missing.set(id, [...(missing.get(id) ?? []), ext.manifest.displayName ?? ext.manifest.name]);
+    }
+  }
+  return [...missing].map(([id, neededBy]) => ({ id, neededBy }));
+}
+
+/**
+ * Installs from Open VSX what `ext` depends on and is not installed yet (and their own
+ * dependencies), as VS Code does. Reports what was installed and what could not be.
+ */
+export async function installDependencies(ext: InstalledExtension, seen = new Set<string>([ext.id])) {
+  const installed: string[] = [];
+  const failed: string[] = [];
+  const visit = async (from: InstalledExtension) => {
+    for (const id of dependenciesOf(from)) {
+      if (seen.has(id) || isInstalled(id)) continue;
+      seen.add(id);
+      const dot = id.indexOf(".");
+      if (dot <= 0) continue;
+      try {
+        const dependency = await installExtension(id.slice(0, dot), id.slice(dot + 1), seen);
+        if (dependency) installed.push(dependency.manifest.displayName ?? dependency.manifest.name);
+      } catch (e) {
+        failed.push(`${id}: ${errorMessage(e)}`);
+      }
+    }
+  };
+  await visit(ext);
+  const name = ext.manifest.displayName ?? ext.manifest.name;
+  if (installed.length) notify("success", `Installed what ${name} needs`, installed.join(", "));
+  if (failed.length) notify("error", `${name} is missing extensions it needs`, failed.join("\n"));
 }
 
 /** Stops the download of an install in flight; what was installed before stays. */
@@ -368,6 +440,7 @@ export async function installVsixFiles(paths: string[]): Promise<InstalledExtens
     try {
       const ext = await track(`Installing ${file}…`, () => extensionsApi.installVsix(path));
       await finishInstall(ext);
+      await installDependencies(ext);
       installed.push(ext);
       notify("success", `Installed ${ext.manifest.displayName ?? ext.manifest.name} ${ext.manifest.version}`, `From ${file}`);
     } catch (e) {

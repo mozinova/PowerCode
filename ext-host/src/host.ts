@@ -17,6 +17,8 @@ import * as chat from "./chat";
 import * as comments from "./comments";
 import * as lm from "./lm";
 import * as scm from "./scm";
+import * as git from "./git";
+import { BUILTIN_EXTENSIONS } from "./git";
 import * as testing from "./testing";
 import * as files from "./files";
 import * as tabs from "./tabs";
@@ -217,12 +219,33 @@ async function activate(extension: ExtensionDescription) {
   }
   if (state.active || state.activate) return state.activate;
   const run = async () => {
-    // Dependencies activate first, as in VS Code.
-    for (const dependency of extension.manifest.extensionDependencies ?? []) {
-      const required = host.extensions.find((e) => e.id === String(dependency).toLowerCase());
-      if (required && typeof required.manifest.main === "string") await activate(required);
-    }
     const name = extension.manifest.displayName ?? extension.manifest.name;
+    // Dependencies activate first, as in VS Code; without them the extension does not
+    // activate at all (it would fail on `getExtension(dependency).exports`).
+    for (const dependency of extension.manifest.extensionDependencies ?? []) {
+      const id = String(dependency).toLowerCase();
+      if (!host.installedIds.includes(id)) {
+        rpc.notify("extensions/activationFailed", {
+          id: extension.id,
+          name,
+          message: `Cannot activate '${name}' because it depends on '${dependency}', which is not installed or is disabled.`,
+          missingDependency: id,
+        });
+        return;
+      }
+      const required = host.extensions.find((e) => e.id === id);
+      if (required && typeof required.manifest.main === "string") {
+        await activate(required);
+        if (!extensionStates.get(required.id)?.active) {
+          rpc.notify("extensions/activationFailed", {
+            id: extension.id,
+            name,
+            message: `Cannot activate '${name}' because its dependency '${dependency}' failed to activate.`,
+          });
+          return;
+        }
+      }
+    }
     try {
       const main = require(path.resolve(extension.path, extension.manifest.main));
       const subscriptions: { dispose(): unknown }[] = [];
@@ -326,6 +349,11 @@ rpc.onRequest("initialize", async (params: any) => {
   host.remote = params.remote ?? null;
   host.trusted = params.trusted !== false;
   host.localExtensionPaths = params.localExtensionPaths ?? {};
+  host.installedIds = [
+    ...(params.installedIds ?? host.extensions.map((e: ExtensionDescription) => e.id)).map((id: string) => id.toLowerCase()),
+    // What PowerCode provides itself counts as installed (`vscode.git`, see git.ts).
+    ...Object.keys(BUILTIN_EXTENSIONS),
+  ];
   return {
     // Commands contributed by extensions with code, for the command palette.
     commands: runnable().flatMap((e) =>
@@ -412,6 +440,7 @@ rpc.onNotification("documents/close", (params: { uri: string }) => {
   onDidClose.fire(document);
 });
 
+rpc.onNotification("editor/visibleRanges", (params: { uri: string; ranges: any[] }) => hostEvents.setVisibleRanges(params));
 rpc.onNotification("editor/active", (params: { uri: string | null; selection?: any; visible?: (string | null)[]; activeIndex?: number }) =>
   hostEvents.setActiveEditor(params),
 );
@@ -447,6 +476,7 @@ terminals.listen();
 tasks.listen();
 authentication.listen();
 scm.listen();
+git.listen();
 testing.listen();
 comments.listen();
 chat.listen();

@@ -45,6 +45,13 @@ const isFocusedGroup = (group: number) => useWorkspace.getState().activeGroup ==
 /** The code editor of each group showing a text file. */
 const editors = new Map<number, monaco.editor.IStandaloneCodeEditor>();
 
+let scrollListener: (() => void) | null = null;
+
+/** Calls `listener` when the focused group's editor scrolls (extensions' visible ranges). */
+export function onActiveEditorScroll(listener: () => void) {
+  scrollListener = listener;
+}
+
 /** The focused group's code editor, if it shows a text file. */
 export function activeEditor(): monaco.editor.IStandaloneCodeEditor | undefined {
   return editors.get(useWorkspace.getState().activeGroup);
@@ -189,6 +196,9 @@ function MonacoHost({ group }: { group: EditorGroup }) {
       editor.onDidChangeModelLanguage(status),
       editor.onDidChangeModelOptions(status),
       editor.onDidFocusEditorText(() => useWorkspace.getState().focusGroup(group.id)),
+      editor.onDidScrollChange((e) => {
+        if (e.scrollTopChanged && isFocusedGroup(group.id)) scrollListener?.();
+      }),
     ];
     return () => {
       listeners.forEach((l) => l.dispose());

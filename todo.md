@@ -59,11 +59,14 @@ and the surface generated from `@types/vscode` (`bun run gen:vscode-surface`).
 
 ## Source control, testing, comments
 
+- [x] The `vscode.git` extension's API (`getAPI(1)`), built into the extension host:
+      repositories, HEAD/upstream, remotes, refs, index/working tree/merge changes, `git:`
+      documents, log/show/config, add/commit/checkout/branch/fetch/pull/push and more;
+      `vscode.git-base` too. Missing: stash, rebase state, submodules, remote source
+      pickers, credential/push-error providers (accepted, not used).
 - [x] `scm.createSourceControl` (and `inputBox`) — shown in the Commit tool window under
       the built-in Git. Missing: `quickDiffProvider` (gutter), `inputBox.validateInput`
       messages in the UI, `statusBarCommands` in the status bar, `scm/inputBox` menu.
-      Extensions built on the `vscode.git` extension's API (GitLens) still need that
-      built-in extension.
 - [x] `tests.createTestController` — Testing tool window (shown once an extension has
       tests): discovery, run/debug per test or all, results, failure messages, output in
       "Test Results". Missing: coverage, continuous runs, test gutter icons in the editor,

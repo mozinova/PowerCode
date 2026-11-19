@@ -6,12 +6,12 @@ import { Channel, convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { appDataDir, join } from "@tauri-apps/api/path";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { activeEditor } from "../components/EditorArea";
+import { activeEditor, onActiveEditorScroll } from "../components/EditorArea";
 import { monaco } from "../editor/monaco";
 import { fileUri } from "../editor/uris";
 import { getModel, isModelDirty, loadModel, modelPath, moveModel, onDidSaveModel, saveModel, setWillSaveParticipant } from "../editor/models";
 import { runFileOperation, setFileOperationParticipant, type FileOperation } from "../lib/fileOperations";
-import { useExtensions } from "../extensions/runtime";
+import { installExtension, useExtensions } from "../extensions/runtime";
 import { activeThemeKind } from "../editor/themes";
 import { errorMessage, fsApi, type InstalledExtension } from "../lib/ipc";
 import { basename } from "../lib/paths";
@@ -247,6 +247,8 @@ async function start(key: string, extensions: InstalledExtension[], root: string
         trusted,
         // A remote host maps its extensions' media (webviews, icons) to these local copies.
         localExtensionPaths: Object.fromEntries(extensions.map((e) => [e.id, e.path])),
+        // Every enabled extension, also those without code, for `extensionDependencies`.
+        installedIds: useExtensions.getState().installed.map((e) => e.id),
       });
       setConfigurationContext(settings, result.defaults);
       useExtensionHost.setState({ commands: result.commands, status: "running" });
@@ -378,11 +380,31 @@ function tabDocumentUri(path: string | null): string | null {
   return getModel(path) ? fileUri(path).toString() : null;
 }
 
+/** The lines the editor shows (`TextEditor.visibleRanges`), 0-based. */
+function visibleRanges(editor: monaco.editor.ICodeEditor | undefined) {
+  return (editor?.getVisibleRanges() ?? []).map((r) => ({
+    start: { line: r.startLineNumber - 1, character: r.startColumn - 1 },
+    end: { line: r.endLineNumber - 1, character: r.endColumn - 1 },
+  }));
+}
+
+let scrollTimer: number | undefined;
+
+/** The focused editor scrolled: extensions follow (e.g. the Markdown preview's scroll sync). */
+function editorScrolled() {
+  window.clearTimeout(scrollTimer);
+  scrollTimer = window.setTimeout(() => {
+    const model = activeEditor()?.getModel();
+    if (rpc.isRunning() && model) rpc.notify("editor/visibleRanges", { uri: model.uri.toString(), ranges: visibleRanges(activeEditor()) });
+  }, 100);
+}
+
 function sendActiveEditor() {
   const editor = activeEditor();
   const model = editor?.getModel();
   const selection = editor?.getSelection();
   rpc.notify("editor/active", {
+    visibleRanges: visibleRanges(editor),
     // `visibleTextEditors`: what each group shows, left to right.
     visible: useWorkspace.getState().groups.map((g) => tabDocumentUri(g.activePath)),
     activeIndex: useWorkspace.getState().groups.findIndex((g) => g.id === useWorkspace.getState().activeGroup),
@@ -822,10 +844,17 @@ function registerHandlers() {
   });
 
   rpc.onNotification("extensions/activated", ({ id }) => log("info", `Activated ${id}`));
-  rpc.onNotification("extensions/activationFailed", ({ id, name, message }) => {
+  rpc.onNotification("extensions/activationFailed", ({ id, name, message, missingDependency }) => {
     log("error", `Activating ${id} failed: ${message}`);
-    void ask("error", `${name} failed to activate`, message.split("\n")[0], ["Show Output"]).then((choice) => {
-      if (choice === 0) showOutput("host");
+    // A dependency that is not installed: offer it (installing restarts the host, which retries).
+    const actions = missingDependency ? [`Install ${missingDependency}`, "Show Output"] : ["Show Output"];
+    void ask("error", `${name} failed to activate`, message.split("\n")[0], actions).then((choice) => {
+      if (missingDependency && choice === 0) {
+        const dot = missingDependency.indexOf(".");
+        void installExtension(missingDependency.slice(0, dot), missingDependency.slice(dot + 1)).catch((e) =>
+          notify("error", `Could not install ${missingDependency}`, errorMessage(e)),
+        );
+      } else if (choice === actions.length - 1) showOutput("host");
     });
   });
 
@@ -955,6 +984,7 @@ export function startExtensionHost() {
   });
   listenToWebviews();
   setDocumentFlusher((uri) => syncedDocuments.get(uri)?.flush());
+  onActiveEditorScroll(editorScrolled);
   setWillSaveParticipant(willSaveDocument);
   setFileOperationParticipant(fileOperationParticipant);
 

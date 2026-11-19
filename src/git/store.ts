@@ -2,6 +2,7 @@
 //! after anything that can change it (saves, file operations, git commands).
 
 import { create } from "zustand";
+import * as rpc from "../exthost/rpc";
 import { gitApi, type GitFile, type GitStatus } from "../lib/ipc";
 import { parentDir } from "../lib/paths";
 import { pathKey } from "../lib/platform";
@@ -130,7 +131,11 @@ export async function refreshGit() {
     // Ignore a result for a project that was closed meanwhile.
     // Polling returns equal statuses most of the time; keep the old object so nothing re-renders.
     const unchanged = JSON.stringify(status) === JSON.stringify(useGit.getState().status);
-    if (useWorkspace.getState().root === root && !unchanged) useGit.setState({ status, ...index(status) });
+    if (useWorkspace.getState().root === root && !unchanged) {
+      useGit.setState({ status, ...index(status) });
+      // Extensions using the Git API (vscode.git, in the extension host) refresh too.
+      if (rpc.isRunning()) rpc.notify("git/changed", {});
+    }
   } catch {
     if (useWorkspace.getState().root === root) {
       useGit.setState({ status: null, ...EMPTY() });

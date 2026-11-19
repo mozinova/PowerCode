@@ -17,6 +17,7 @@ import * as views from "./views";
 import * as decorations from "./decorations";
 import * as authentication from "./authentication";
 import * as files from "./files";
+import { BUILTIN_EXTENSIONS } from "./git";
 import * as chat from "./chat";
 import * as comments from "./comments";
 import * as lm from "./lm";
@@ -151,6 +152,16 @@ function getDiagnostics(uri?: Uri): any {
 const onDidChangeActiveTextEditor = new EventEmitter<unknown>();
 const onDidChangeTextEditorSelection = new EventEmitter<unknown>();
 const onDidChangeVisibleTextEditors = new EventEmitter<unknown[]>();
+const onDidChangeTextEditorVisibleRanges = new EventEmitter<unknown>();
+
+const toRanges = (ranges?: dto.RangeDto[]) => (ranges ?? []).map((r) => new Range(dto.toPosition(r.start), dto.toPosition(r.end)));
+
+/** The focused editor scrolled. */
+function setVisibleRanges(params: { uri: string; ranges: dto.RangeDto[] }) {
+  if (!activeEditor || activeEditor.document.uri.toString() !== params.uri) return;
+  activeEditor.visibleRanges = toRanges(params.ranges);
+  onDidChangeTextEditorVisibleRanges.fire({ textEditor: activeEditor, visibleRanges: activeEditor.visibleRanges });
+}
 let activeEditor: ReturnType<typeof textEditor> | undefined;
 
 /** The editor the user is in, for other host modules (e.g. `${file}` in debug configurations). */
@@ -169,7 +180,8 @@ function textEditor(document: TextDocumentImpl, selections: Selection[]) {
       editor.selections = [value];
       void rpc.request("editor/reveal", { uri: document.uri.toString(), range: dto.range(value), select: true });
     },
-    visibleRanges: [] as Range[],
+    // Updated by the UI for the focused editor; never empty (extensions read `visibleRanges[0]`).
+    visibleRanges: [new Range(0, 0, 0, 0)] as Range[],
     options: { tabSize: 4, insertSpaces: true },
     viewColumn: 1,
     async edit(callback: (builder: any) => void) {
@@ -212,7 +224,7 @@ let visibleEditors: ReturnType<typeof textEditor>[] = [];
 const ORIGIN = () => new Selection(new Position(0, 0), new Position(0, 0));
 
 function setActiveEditor(
-  params: { uri: string | null; selection?: dto.RangeDto; visible?: (string | null)[]; activeIndex?: number } | null,
+  params: { uri: string | null; selection?: dto.RangeDto; visible?: (string | null)[]; activeIndex?: number; visibleRanges?: dto.RangeDto[] } | null,
 ) {
   const document = params?.uri ? documentFor(params.uri) : undefined;
   const selection = params?.selection
@@ -236,6 +248,11 @@ function setActiveEditor(
     activeEditor = undefined;
   }
 
+  // Never empty: extensions read `visibleRanges[0]` (e.g. where the Markdown preview opens).
+  if (activeEditor) {
+    const ranges = toRanges(params?.visibleRanges);
+    activeEditor.visibleRanges = ranges.length ? ranges : [new Range(selection.start.line, 0, selection.start.line, 0)];
+  }
   const visible = list.flatMap((uri, index) => {
     const doc = uri ? documentFor(uri) : undefined;
     if (!doc) return [];
@@ -801,6 +818,22 @@ function formatL10n(message: string, args: unknown[]) {
   );
 }
 
+/** An extension PowerCode provides itself (`vscode.git`), when the real one is not installed. */
+function builtinExtension(id: string) {
+  const builtin = BUILTIN_EXTENSIONS[id];
+  if (!builtin) return undefined;
+  return {
+    id,
+    extensionUri: Uri.file(host.appRoot || "/"),
+    extensionPath: host.appRoot,
+    packageJSON: { name: builtin.name, publisher: "vscode", displayName: builtin.displayName, version: VSCODE_VERSION },
+    extensionKind: types.ExtensionKind.Workspace,
+    isActive: true,
+    exports: builtin.exports,
+    activate: () => Promise.resolve(builtin.exports),
+  };
+}
+
 function extensionObject(description: ExtensionDescription, state: { exports?: unknown; active: boolean }) {
   return {
     id: `${description.manifest.publisher}.${description.manifest.name}`,
@@ -864,7 +897,7 @@ export function createApi(description: ExtensionDescription) {
       onDidChangeActiveTextEditor: onDidChangeActiveTextEditor.event,
       onDidChangeVisibleTextEditors: onDidChangeVisibleTextEditors.event,
       onDidChangeTextEditorSelection: onDidChangeTextEditorSelection.event,
-      onDidChangeTextEditorVisibleRanges: never(),
+      onDidChangeTextEditorVisibleRanges: onDidChangeTextEditorVisibleRanges.event,
       onDidChangeTextEditorOptions: never(),
       onDidChangeWindowState: never(),
       onDidChangeActiveColorTheme: onDidChangeColorTheme.event,
@@ -1091,7 +1124,7 @@ export function createApi(description: ExtensionDescription) {
     extensions: {
       getExtension(id: string) {
         const description = host.extensions.find((e) => e.id === id.toLowerCase());
-        if (!description) return undefined;
+        if (!description) return builtinExtension(id.toLowerCase());
         let state = extensionStates.get(description.id);
         if (!state) {
           state = { active: false };
@@ -1100,7 +1133,9 @@ export function createApi(description: ExtensionDescription) {
         return extensionObject(description, state);
       },
       get all() {
-        return host.extensions.map((e) => (api.extensions as any).getExtension(e.id));
+        const installed = host.extensions.map((e) => (api.extensions as any).getExtension(e.id));
+        const builtins = Object.keys(BUILTIN_EXTENSIONS).filter((id) => !host.extensions.some((e) => e.id === id)).map(builtinExtension);
+        return [...installed, ...builtins];
       },
       onDidChange: never(),
     },
@@ -1180,4 +1215,4 @@ export function createApi(description: ExtensionDescription) {
   });
 }
 
-export const hostEvents = { setActiveEditor };
+export const hostEvents = { setActiveEditor, setVisibleRanges };
