@@ -16,7 +16,7 @@ import { errorMessage, extensionsApi, type InstalledExtension, type OpenVsxEntry
 import { notify } from "../state/notifications";
 import { setAutoUpdateExtensions, useSettings } from "../state/settings";
 import { useWorkspace } from "../state/workspace";
-import { InstallProgressBar, useInstallProgress } from "./InstallProgress";
+import { InstallProgressRing, useInstallProgress } from "./InstallProgress";
 import { Select } from "./Select";
 import { IconButton, ToolWindowHeader } from "./ui";
 import { tooltipProps } from "./Tooltip";
@@ -152,7 +152,7 @@ function InstalledRow({ ext }: { ext: InstalledExtension }) {
           <span className="shrink-0 text-xs text-fg-subtle">{manifest.version}</span>
         </div>
         <div className="truncate text-xs text-fg-muted">{ext.disabled ? "Disabled" : summarize(ext)}</div>
-        {progress && <InstallProgressBar progress={progress} namespace={manifest.publisher} name={manifest.name} className="mt-1.5" />}
+        {progress && <InstallProgressRing progress={progress} namespace={manifest.publisher} name={manifest.name} className="mt-1.5" />}
       </div>
       {ext.disabled ? (
         <button
@@ -250,7 +250,7 @@ function MarketplaceRow({ entry }: { entry: OpenVsxEntry }) {
             </span>
           )}
         </div>
-        {progress && <InstallProgressBar progress={progress} namespace={entry.namespace} name={entry.name} className="mt-1.5" />}
+        {progress && <InstallProgressRing progress={progress} namespace={entry.namespace} name={entry.name} className="mt-1.5" />}
       </div>
       <button
         type="button"

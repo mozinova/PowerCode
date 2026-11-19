@@ -4,6 +4,7 @@
 
 import * as path from "node:path";
 import { executeCommand, openTextDocument } from "./api";
+import { decodeBinary, encodeBinary } from "./binary";
 import * as rpc from "./rpc";
 import { host } from "./state";
 import { CancellationTokenSource, Disposable, EventEmitter, MarkdownString, ThemeColor, ThemeIcon, Uri } from "./types";
@@ -294,7 +295,8 @@ function createWebview(id: string, extensionId: string, initialOptions: any) {
     },
     onDidReceiveMessage: onDidReceiveMessage.event,
     postMessage(message: unknown) {
-      rpc.notify("webview/postMessage", { id, message });
+      // Binary data keeps its type through the JSON of the RPC (decoded in the page).
+      rpc.notify("webview/postMessage", { id, message: encodeBinary(message) });
       return Promise.resolve(true);
     },
     asWebviewUri,
@@ -520,7 +522,7 @@ export function listen() {
   rpc.onRequest("customEditors/save", saveCustomEditor);
 
   rpc.onNotification("webview/message", (params: { id: string; message: unknown }) => {
-    webviews.get(params.id)?.onDidReceiveMessage.fire(params.message);
+    webviews.get(params.id)?.onDidReceiveMessage.fire(decodeBinary(params.message));
   });
   rpc.onNotification("webview/viewState", (params: { id: string; active: boolean; visible: boolean }) => {
     const entry = webviews.get(params.id);

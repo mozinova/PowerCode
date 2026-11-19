@@ -33,6 +33,7 @@ import { isSshPath } from "../lib/remote";
 import { GIT_COLORS, gitStateOf, useGit } from "../git/store";
 import { useWorkspace } from "../state/workspace";
 import { savedExplorer, saveExplorer } from "../state/session";
+import { watchFolders } from "../editor/externalChanges";
 import { FileIcon } from "./FileIcon";
 import { ContextMenu, type MenuEntry } from "./Menu";
 import { IconButton, ToolWindowHeader } from "./ui";
@@ -134,6 +135,19 @@ function useTree(root: string) {
 
   /** Every expanded folder's entries are loaded: the tree has its full height. */
   const ready = useMemo(() => [...expanded].every((p) => children.has(p)), [expanded, children]);
+
+  // Files added, removed or renamed outside the app (an AI agent, `git`) show up: the
+  // folders on screen are checked with the open files (see editor/externalChanges.ts).
+  const shownFolders = useRef<string[]>([]);
+  shownFolders.current = rows.filter((r) => r.expanded).map((r) => r.entry.path);
+  useEffect(
+    () =>
+      watchFolders(
+        () => shownFolders.current,
+        (folders) => folders.forEach((folder) => void load(folder)),
+      ),
+    [load],
+  );
 
   return { rows, ready, load, toggle, refresh, collapseAll, afterRename };
 }

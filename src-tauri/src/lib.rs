@@ -48,6 +48,7 @@ pub fn run() {
             fs::create_dir,
             fs::rename_path,
             fs::delete_path,
+            fs::fs_signatures,
             terminal::terminal_spawn,
             profiles::terminal_profiles,
             terminal::terminal_write,

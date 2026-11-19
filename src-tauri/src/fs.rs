@@ -200,6 +200,90 @@ pub async fn delete_path(remotes: State<'_, Remotes>, path: String) -> CmdResult
     trash::delete(&path).map_err(err)
 }
 
+/// A file's or folder's change signature: modification time and size. A folder's
+/// time changes when entries are added, removed or renamed in it.
+fn local_signature(path: &str) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    Some(format!("{modified}:{}", meta.len()))
+}
+
+/// `stat` of many paths on a remote in one round trip: signature by remote path.
+async fn remote_signatures(remotes: &Remotes, host: &str, paths: &[String]) -> std::collections::HashMap<String, String> {
+    let quoted: Vec<String> = paths.iter().map(|p| remote::quote(p)).collect();
+    // Missing paths are just absent from the output; `true` keeps the exit status 0.
+    let script = format!("stat -c '%y|%s|%n' -- {} 2>/dev/null; true", quoted.join(" "));
+    let output = Remotes::exec(remotes, host, script).await.unwrap_or_default();
+    String::from_utf8_lossy(&output)
+        .lines()
+        .filter_map(|line| {
+            let mut parts = line.splitn(3, '|');
+            let (time, size, path) = (parts.next()?, parts.next()?, parts.next()?);
+            Some((path.to_string(), format!("{time}:{size}")))
+        })
+        .collect()
+}
+
+/// Change signatures of `paths` (None where a path does not exist), to notice
+/// changes made outside the app (AI agents, other editors, `git`): remote paths
+/// are checked with one command per host or distribution.
+#[tauri::command]
+pub async fn fs_signatures(remotes: State<'_, Remotes>, paths: Vec<String>) -> CmdResult<Vec<Option<String>>> {
+    // Remote paths grouped by session (SSH host or WSL distribution), with their index.
+    let mut groups: std::collections::HashMap<String, Vec<(usize, String)>> = std::collections::HashMap::new();
+    let mut result: Vec<Option<String>> = vec![None; paths.len()];
+    for (index, path) in paths.iter().enumerate() {
+        if let Some((host, file)) = remote::parse(path) {
+            groups.entry(host.to_string()).or_default().push((index, file));
+        } else if let Some((distro, linux)) = crate::wsl::parse_share(path) {
+            groups.entry(remote::wsl_session(&distro)).or_default().push((index, linux));
+        }
+    }
+    for (session, entries) in &groups {
+        let list: Vec<String> = entries.iter().map(|(_, p)| p.clone()).collect();
+        let found = remote_signatures(&remotes, session, &list).await;
+        for (index, path) in entries {
+            result[*index] = found.get(path).cloned();
+        }
+    }
+    let local: Vec<(usize, String)> = paths
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| remote::parse(p).is_none() && crate::wsl::parse_share(p).is_none())
+        .map(|(i, p)| (i, p.clone()))
+        .collect();
+    let signatures = tauri::async_runtime::spawn_blocking(move || local.into_iter().map(|(i, p)| (i, local_signature(&p))).collect::<Vec<_>>())
+        .await
+        .map_err(err)?;
+    for (index, signature) in signatures {
+        result[index] = signature;
+    }
+    Ok(result)
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+
+    #[test]
+    fn signatures_change_with_the_content_and_the_folder() {
+        let dir = std::env::temp_dir().join(format!("powercode-signatures-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt");
+        std::fs::write(&file, "one").unwrap();
+        let (file, folder) = (file.to_string_lossy().into_owned(), dir.to_string_lossy().into_owned());
+        let before = (local_signature(&file).unwrap(), local_signature(&folder).unwrap());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&file, "three").unwrap();
+        std::fs::write(dir.join("b.txt"), "new").unwrap();
+        assert_ne!(local_signature(&file).unwrap(), before.0, "the file's size and time changed");
+        assert_ne!(local_signature(&folder).unwrap(), before.1, "an entry was added to the folder");
+        assert!(local_signature(&dir.join("missing").to_string_lossy()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 #[cfg(test)]
 mod wsl_tests {
     /// The file index of a WSL folder comes from inside the distribution, with the

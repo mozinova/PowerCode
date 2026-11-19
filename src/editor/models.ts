@@ -125,6 +125,25 @@ export async function reloadCleanModels() {
   );
 }
 
+/** Re-reads one open file from disk if it has no unsaved edits (it changed outside the app). */
+export async function reloadModelIfClean(path: string) {
+  const model = getModel(path);
+  if (!model || isDirty(path, model)) return;
+  const text = await fsApi.readTextFile(path).catch(() => null);
+  if (text === null || text === model.getValue() || isDirty(path, model)) return;
+  // As one undoable edit, so the cursor and scroll position stay where they were.
+  model.pushStackElement();
+  model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+  model.pushStackElement();
+  savedVersions.set(path, model.getAlternativeVersionId());
+  useWorkspace.getState().setDirty(path, false);
+}
+
+/** Paths of the open files (models loaded from disk). */
+export function openModelPaths(): string[] {
+  return [...paths.values()];
+}
+
 /** True if `path` is open with unsaved edits. */
 export function isModelDirty(path: string): boolean {
   const model = getModel(path);

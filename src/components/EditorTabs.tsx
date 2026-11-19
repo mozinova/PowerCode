@@ -209,21 +209,21 @@ function TabsMenu({ group }: { group: EditorGroup }) {
   const close = useCallback(() => setOpen(false), []);
 
   const active = tabs.find((t) => t.path === activePath) ?? null;
+  // The tabs scroll within the menu, so many of them do not make it tower over the window.
+  const tabItems: MenuEntry[] = tabs.map((tab) => ({
+    label: tab.dirty ? `${tab.name} •` : tab.name,
+    detail: parseExtensionTab(tab.path)
+      ? "Extension"
+      : parseDiffTab(tab.path) || parseCompareTab(tab.path)
+        ? "Diff"
+        : parseCommitDiffTab(tab.path)
+          ? "Commit"
+          : relativePath(parentDir(tab.path), root),
+    icon: <TabIcon tab={tab} />,
+    checked: tab.path === activePath,
+    action: () => setActive(tab.path, group.id),
+  }));
   const items: MenuEntry[] = [
-    ...tabs.map((tab) => ({
-      label: tab.dirty ? `${tab.name} •` : tab.name,
-      detail: parseExtensionTab(tab.path)
-        ? "Extension"
-        : parseDiffTab(tab.path) || parseCompareTab(tab.path)
-          ? "Diff"
-          : parseCommitDiffTab(tab.path)
-            ? "Commit"
-            : relativePath(parentDir(tab.path), root),
-      icon: <TabIcon tab={tab} />,
-      checked: tab.path === activePath,
-      action: () => setActive(tab.path, group.id),
-    })),
-    "separator",
     { label: "Split Right", icon: Columns2, shortcut: "Ctrl+\\", disabled: !active, action: () => splitGroup(group.id) },
     "separator",
     ...closeActions(tabs, active, group.id),
@@ -241,7 +241,7 @@ function TabsMenu({ group }: { group: EditorGroup }) {
           className="size-7"
         />
       </div>
-      {open && <DropdownMenu items={items} anchorRef={anchorRef} align="right" onClose={close} />}
+      {open && <DropdownMenu scrollItems={tabItems} items={items} anchorRef={anchorRef} align="right" onClose={close} />}
     </div>
   );
 }

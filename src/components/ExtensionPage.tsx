@@ -22,7 +22,7 @@ import {
 } from "../lib/ipc";
 import { extensionTabPath } from "../lib/virtualTabs";
 import { useWorkspace } from "../state/workspace";
-import { InstallProgressBar, useInstallProgress } from "./InstallProgress";
+import { InstallProgressRing, useInstallProgress } from "./InstallProgress";
 
 const README_NAMES = ["README.md", "readme.md", "Readme.md"];
 
@@ -207,7 +207,7 @@ function InstallButton({ namespace, name }: { namespace: string; name: string })
         {busy && <Loader2 size={14} className="animate-spin" />}
         {busy ? (installed ? "Uninstalling…" : "Installing…") : installed ? "Uninstall" : "Install"}
       </button>
-      {progress && <InstallProgressBar progress={progress} namespace={namespace} name={name} className="w-56" />}
+      {progress && <InstallProgressRing progress={progress} namespace={namespace} name={name} className="w-56" />}
     </>
   );
 }

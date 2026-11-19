@@ -110,11 +110,14 @@ function MenuList({ items, onClose }: { items: MenuEntry[]; onClose: () => void 
  */
 export function DropdownMenu({
   items,
+  scrollItems,
   anchorRef,
   align = "left",
   onClose,
 }: {
   items: MenuEntry[];
+  /** A long list shown first, scrolling within a bounded height (e.g. the open tabs); `items` stay below it. */
+  scrollItems?: MenuEntry[];
   anchorRef: RefObject<HTMLElement | null>;
   /** `stretch` matches the anchor's width, as a select list does. */
   align?: "left" | "right" | "stretch";
@@ -151,6 +154,27 @@ export function DropdownMenu({
       style={style}
       className={`fixed ${align === "stretch" ? "" : "min-w-56"} ${PANEL_CLASS}`}
     >
+      {scrollItems && scrollItems.length > 0 && (
+        <>
+          <ScrollList items={scrollItems} onClose={onClose} />
+          {items.length > 0 && <div className="my-1 h-px bg-line-soft" />}
+        </>
+      )}
+      <MenuList items={items} onClose={onClose} />
+    </div>
+  );
+}
+
+/** Menu items in a region of bounded height that scrolls, opened at the checked item. */
+function ScrollList({ items, onClose }: { items: MenuEntry[]; onClose: () => void }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    // Buttons are rendered in order, separators aside.
+    const index = items.filter((e): e is MenuItem => e !== "separator").findIndex((e) => e.checked);
+    if (index >= 0) ref.current?.querySelectorAll<HTMLElement>("[role=menuitem]")[index]?.scrollIntoView({ block: "nearest" });
+  }, [items]);
+  return (
+    <div ref={ref} className="max-h-[min(320px,45vh)] overflow-y-auto overscroll-contain">
       <MenuList items={items} onClose={onClose} />
     </div>
   );

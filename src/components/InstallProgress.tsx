@@ -9,7 +9,38 @@ export function useInstallProgress(namespace: string, name: string): InstallProg
   return useExtensions((s) => s.installing[key]);
 }
 
-export function InstallProgressBar({
+const SIZE = 16;
+const STROKE = 2.5;
+const RADIUS = (SIZE - STROKE) / 2;
+const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
+
+/** A ring filling up with `percent`; without one (size unknown, unpacking), a spinning arc. */
+function Ring({ percent }: { percent: number | null }) {
+  const filled = percent === null ? CIRCUMFERENCE * 0.25 : (CIRCUMFERENCE * percent) / 100;
+  return (
+    <svg
+      width={SIZE}
+      height={SIZE}
+      viewBox={`0 0 ${SIZE} ${SIZE}`}
+      className={`shrink-0 -rotate-90 ${percent === null ? "animate-spin" : ""}`}
+      aria-hidden
+    >
+      <circle cx={SIZE / 2} cy={SIZE / 2} r={RADIUS} fill="none" strokeWidth={STROKE} className="stroke-line-soft" />
+      <circle
+        cx={SIZE / 2}
+        cy={SIZE / 2}
+        r={RADIUS}
+        fill="none"
+        strokeWidth={STROKE}
+        strokeLinecap="round"
+        strokeDasharray={`${filled} ${CIRCUMFERENCE}`}
+        className="stroke-accent transition-[stroke-dasharray] duration-150"
+      />
+    </svg>
+  );
+}
+
+export function InstallProgressRing({
   progress,
   namespace,
   name,
@@ -24,7 +55,7 @@ export function InstallProgressBar({
   const { downloaded, total } = progress;
   const unpacking = total !== null && total > 0 && downloaded >= total;
   const percent = total ? Math.min(100, (downloaded / total) * 100) : null;
-  const label = unpacking
+  const sizes = unpacking
     ? "Installing…"
     : total
       ? `${formatBytes(downloaded)} / ${formatBytes(total)}`
@@ -33,43 +64,32 @@ export function InstallProgressBar({
         : "Connecting…";
 
   return (
-    <div className={`flex flex-col gap-1 ${className}`}>
-      <div className="flex items-center gap-1.5">
-        <div
-          role="progressbar"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={percent === null ? undefined : Math.round(percent)}
-          className="h-1 flex-1 overflow-hidden rounded-full bg-line-soft"
+    // One line even in a narrow row: the sizes shorten, the ring and percentage always show.
+    <div
+      role="progressbar"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={percent === null || unpacking ? undefined : Math.round(percent)}
+      className={`flex min-w-0 items-center gap-1.5 text-xs whitespace-nowrap text-fg-subtle ${className}`}
+    >
+      <Ring percent={unpacking ? null : percent} />
+      {percent !== null && !unpacking && <span className="shrink-0 font-medium text-fg-muted tabular-nums">{Math.round(percent)}%</span>}
+      <span className="min-w-0 truncate">{sizes}</span>
+      {/* Once downloaded, the package is being unpacked: too late to cancel. */}
+      {!unpacking && (
+        <button
+          type="button"
+          {...tooltipProps("Cancel Download")}
+          aria-label="Cancel download"
+          onClick={(e) => {
+            e.stopPropagation();
+            void cancelInstall(namespace, name);
+          }}
+          className="ml-auto flex size-4 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-hover hover:text-danger"
         >
-          {percent === null || unpacking ? (
-            // Size unknown or unpacking: an indeterminate, pulsing bar.
-            <div className="h-full w-full animate-pulse bg-accent/70" />
-          ) : (
-            <div className="h-full bg-accent transition-[width] duration-150" style={{ width: `${percent}%` }} />
-          )}
-        </div>
-        {/* Once downloaded, the package is being unpacked: too late to cancel. */}
-        {!unpacking && (
-          <button
-            type="button"
-            {...tooltipProps("Cancel Download")}
-            aria-label="Cancel download"
-            onClick={(e) => {
-              e.stopPropagation();
-              void cancelInstall(namespace, name);
-            }}
-            className="flex size-4 shrink-0 items-center justify-center rounded text-fg-muted hover:bg-hover hover:text-danger"
-          >
-            <X size={12} />
-          </button>
-        )}
-      </div>
-      {/* One line even in a narrow row: the sizes shorten, the percentage always shows. */}
-      <div className="flex justify-between gap-2 text-xs whitespace-nowrap text-fg-subtle">
-        <span className="min-w-0 truncate">{label}</span>
-        {percent !== null && !unpacking && <span className="shrink-0">{Math.round(percent)}%</span>}
-      </div>
+          <X size={12} />
+        </button>
+      )}
     </div>
   );
 }

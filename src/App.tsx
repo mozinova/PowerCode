@@ -28,6 +28,7 @@ import { GitHubSignIn } from "./components/GitHubSignIn";
 import { WebviewLayer } from "./components/WebviewFrame";
 import { initExtensions, startExtensionUpdates } from "./extensions/runtime";
 import { startAutoSave } from "./editor/autosave";
+import { startExternalChangeWatcher } from "./editor/externalChanges";
 import { startSessionSaving } from "./state/session";
 import { startExtensionHost } from "./exthost/host";
 import { watchIndentationSettings } from "./editor/options";
@@ -144,6 +145,7 @@ export default function App() {
     startExtensionHost();
     startGitWatcher();
     startAutoSave();
+    startExternalChangeWatcher();
     startSessionSaving();
     // A folder given on the command line (or "Open with") wins over the last one.
     listenForOpenRequests();

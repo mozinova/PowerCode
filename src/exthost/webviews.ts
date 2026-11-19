@@ -3,6 +3,7 @@
 //! an origin of its own, and talks to the extension through postMessage.
 
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { WEBVIEW_BINARY_CODEC } from "./webviewBinary";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { create } from "zustand";
 import { activeThemeColors } from "../editor/themes";
@@ -137,11 +138,13 @@ kbd { background-color: var(--vscode-editorWidget-background); border: 1px solid
 export function bootstrap(id: string): string {
   const state = JSON.stringify(savedStates.get(id) ?? null).replace(/</g, "\\u003c");
   return `(function () {
+  ${WEBVIEW_BINARY_CODEC}
   var state = ${state};
   var post = function (message) { window.parent.postMessage(Object.assign({ __pcWebview: ${JSON.stringify(id)} }, message), "*"); };
   var acquired = false;
   var api = Object.freeze({
-    postMessage: function (message) { post({ type: "message", message: message }); },
+    // Binary data is encoded: the message goes on to the extension host as JSON.
+    postMessage: function (message) { post({ type: "message", message: pcEncodeBinary(message) }); },
     getState: function () { return state; },
     setState: function (value) { state = value; post({ type: "setState", state: value }); return value; }
   });
@@ -159,7 +162,8 @@ export function bootstrap(id: string): string {
     if (event.source !== window.parent || !data || data.__pcHostMessage !== true) return;
     event.stopImmediatePropagation();
     var origin = window.location.origin;
-    window.postMessage(data.message, origin && origin !== "null" ? origin : "*");
+    // Binary data the extension sent arrives encoded (the RPC is JSON): rebuilt here.
+    window.postMessage(pcDecodeBinary(data.message), origin && origin !== "null" ? origin : "*");
   }, true);
   // Errors go to PowerCode's Output ("Webviews"), as a webview has no visible console.
   var describe = function (value) {
