@@ -24,8 +24,10 @@ import { saveIfDirty } from "./editor/autosave";
 import { pickRemoteFolder } from "./state/folderPicker";
 import { enterFolder } from "./state/trust";
 import { restoreTabs } from "./state/session";
+import { addRecentProject, removeRecentProject } from "./state/recentProjects";
 import { useSettings } from "./state/settings";
 import { notify } from "./state/notifications";
+import { track } from "./state/activity";
 import { openPaths, useWorkspace } from "./state/workspace";
 import { closeAllTerminals, newTerminal } from "./terminal/sessions";
 
@@ -75,11 +77,24 @@ export async function openFolder(path?: string) {
   // The tabs it had last time.
   restoreTabs(root);
   endSshSession(previous, root);
+  addRecentProject(root);
   try {
     localStorage.setItem(LAST_ROOT_KEY, root);
   } catch {
     // Not remembering the folder is harmless.
   }
+}
+
+/** Opens a folder from the recent list; one that is gone (deleted, host unreachable) leaves the list. */
+export async function openRecentProject(path: string) {
+  try {
+    await track(`Opening ${basename(path)}…`, () => fsApi.listDir(path));
+  } catch (e) {
+    removeRecentProject(path);
+    notify("error", `Could not open ${basename(path)}`, `${path}\n${errorMessage(e)}`);
+    return;
+  }
+  await openFolder(path);
 }
 
 /** Asks for a folder on this machine with the native dialog and opens it. */

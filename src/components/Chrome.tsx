@@ -2,10 +2,26 @@
 //! (the tool window stripes are in ToolStripes.tsx).
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ChevronDown, Copy, Loader2, Menu, Minus, Server, ShieldAlert, Square, Unplug, X, type LucideIcon } from "lucide-react";
+import {
+  ChevronDown,
+  Copy,
+  Folder,
+  FolderOpen,
+  Loader2,
+  Menu,
+  Minus,
+  Server,
+  ShieldAlert,
+  Square,
+  Unplug,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { closeActiveTab, closeFolder, closeRemoteConnection, openFolder, openSettings, saveActive } from "../actions";
+import { closeActiveTab, closeFolder, closeRemoteConnection, openFolder, openRecentProject, openSettings, saveActive } from "../actions";
 import { basename } from "../lib/paths";
+import { pathKey } from "../lib/platform";
+import { useRecentProjects } from "../state/recentProjects";
 import { remoteLabel, remoteOf } from "../lib/remote";
 import * as hostRpc from "../exthost/rpc";
 import { useExtensionHost, type StatusItem as ExtensionStatusItem } from "../exthost/state";
@@ -110,24 +126,62 @@ function WindowControls() {
   );
 }
 
-export function MainToolbar() {
+/** Where a recent folder lives, shown next to its name: its path, or the remote's name. */
+function projectDetail(path: string) {
+  const remote = remoteOf(path);
+  if (!remote) return path;
+  // The path on the remote, as it is spelled there.
+  const inside = path.replace(/^ssh:\/\/[^/]+|^\\\\wsl(?:\.localhost|\$)\\[^\\]+/i, "").replace(/\\/g, "/");
+  return `${remoteLabel(remote)} · ${inside || "/"}`;
+}
+
+/** The project name in the toolbar: the last folders opened, then "Browse…" for another. */
+function ProjectSelector() {
   const root = useWorkspace((s) => s.root);
+  const recent = useRecentProjects((s) => s.projects);
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
   const name = root ? basename(root) : "No Project";
+
+  const items: MenuEntry[] = [
+    ...recent.map((path) => ({
+      label: basename(path),
+      detail: projectDetail(path),
+      icon: remoteOf(path) ? Server : Folder,
+      checked: root !== null && pathKey(path) === pathKey(root),
+      action: () => {
+        if (root === null || pathKey(path) !== pathKey(root)) void openRecentProject(path);
+      },
+    })),
+    ...(recent.length > 0 ? ["separator" as const] : []),
+    { label: "Browse…", icon: FolderOpen, shortcut: "Ctrl+O", action: () => void openFolder() },
+  ];
+
+  return (
+    <div ref={anchorRef} className="min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        {...tooltipProps(root ?? "Open Folder")}
+        className={`flex h-7 min-w-0 items-center gap-2 rounded-md px-1.5 hover:bg-hover ${open ? "bg-hover" : ""}`}
+      >
+        <span className="truncate font-semibold">{name}</span>
+        <ChevronDown size={14} className="shrink-0 text-fg-muted" />
+      </button>
+      {open && <DropdownMenu items={items} anchorRef={anchorRef} onClose={close} />}
+    </div>
+  );
+}
+
+export function MainToolbar() {
   return (
     // Only elements carrying `data-tauri-drag-region` themselves drag the window.
     // The side columns share the free width equally so the search stays centred.
     <header data-tauri-drag-region className="grid h-10 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 relative">
       <div data-tauri-drag-region className="flex h-full min-w-0 items-center gap-2 pl-2">
         <MainMenu />
-        <button
-          type="button"
-          onClick={() => void openFolder()}
-          {...tooltipProps(root ?? "Open Folder")}
-          className="flex h-7 min-w-0 items-center gap-2 rounded-md px-1.5 hover:bg-hover"
-        >
-          <span className="truncate font-semibold">{name}</span>
-          <ChevronDown size={14} className="shrink-0 text-fg-muted" />
-        </button>
+        <ProjectSelector />
         <BranchWidget />
       </div>
       <FileSearch />

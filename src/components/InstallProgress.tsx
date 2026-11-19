@@ -65,9 +65,10 @@ export function InstallProgressBar({
           </button>
         )}
       </div>
-      <div className="flex justify-between text-xs text-fg-subtle">
-        <span>{label}</span>
-        {percent !== null && !unpacking && <span>{Math.round(percent)}%</span>}
+      {/* One line even in a narrow row: the sizes shorten, the percentage always shows. */}
+      <div className="flex justify-between gap-2 text-xs whitespace-nowrap text-fg-subtle">
+        <span className="min-w-0 truncate">{label}</span>
+        {percent !== null && !unpacking && <span className="shrink-0">{Math.round(percent)}%</span>}
       </div>
     </div>
   );
