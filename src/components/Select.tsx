@@ -51,7 +51,9 @@ export function Select({
           align="stretch"
           anchorRef={anchorRef}
           onClose={close}
-          items={options.map((option) => ({
+          items={[]}
+          // Long lists (e.g. branches) scroll, opened at the current option.
+          scrollItems={options.map((option) => ({
             label: option.label,
             checked: option.id === value,
             action: () => option.id !== value && onChange(option.id),

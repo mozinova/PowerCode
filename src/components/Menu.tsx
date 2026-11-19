@@ -111,6 +111,7 @@ function MenuList({ items, onClose }: { items: MenuEntry[]; onClose: () => void 
 export function DropdownMenu({
   items,
   scrollItems,
+  scrollPlacement = "before",
   anchorRef,
   align = "left",
   onClose,
@@ -118,6 +119,8 @@ export function DropdownMenu({
   items: MenuEntry[];
   /** A long list shown first, scrolling within a bounded height (e.g. the open tabs); `items` stay below it. */
   scrollItems?: MenuEntry[];
+  /** Where `scrollItems` go: above `items` (the default) or below them (e.g. branches under the Git actions). */
+  scrollPlacement?: "before" | "after";
   anchorRef: RefObject<HTMLElement | null>;
   /** `stretch` matches the anchor's width, as a select list does. */
   align?: "left" | "right" | "stretch";
@@ -154,13 +157,19 @@ export function DropdownMenu({
       style={style}
       className={`fixed ${align === "stretch" ? "" : "min-w-56"} ${PANEL_CLASS}`}
     >
-      {scrollItems && scrollItems.length > 0 && (
+      {scrollItems && scrollItems.length > 0 && scrollPlacement === "before" && (
         <>
           <ScrollList items={scrollItems} onClose={onClose} />
           {items.length > 0 && <div className="my-1 h-px bg-line-soft" />}
         </>
       )}
       <MenuList items={items} onClose={onClose} />
+      {scrollItems && scrollItems.length > 0 && scrollPlacement === "after" && (
+        <>
+          {items.length > 0 && <div className="my-1 h-px bg-line-soft" />}
+          <ScrollList items={scrollItems} onClose={onClose} />
+        </>
+      )}
     </div>
   );
 }

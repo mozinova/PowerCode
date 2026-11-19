@@ -63,10 +63,12 @@ export function BranchWidget() {
     "separator",
     { label: "New Branch…", icon: GitBranchPlus, action: () => setCreating(true) },
   ];
+  // Branches scroll in a region of their own; the actions above stay in view.
+  const branchItems: MenuEntry[] = [];
   if (local.length) {
-    items.push("separator", { label: "Local Branches", disabled: true, action: () => {} });
+    branchItems.push({ label: "Local Branches", disabled: true, action: () => {} });
     for (const branch of local) {
-      items.push({
+      branchItems.push({
         label: branch.name,
         icon: GitBranch,
         detail: branch.upstream ?? undefined,
@@ -76,9 +78,10 @@ export function BranchWidget() {
     }
   }
   if (remote.length) {
-    items.push("separator", { label: "Remote Branches", disabled: true, action: () => {} });
+    if (branchItems.length) branchItems.push("separator");
+    branchItems.push({ label: "Remote Branches", disabled: true, action: () => {} });
     for (const branch of remote) {
-      items.push({ label: branch.name, icon: GitBranch, action: () => void checkout(branch.name, true) });
+      branchItems.push({ label: branch.name, icon: GitBranch, action: () => void checkout(branch.name, true) });
     }
   }
 
@@ -100,7 +103,9 @@ export function BranchWidget() {
         )}
         <ChevronDown size={14} className="shrink-0 text-fg-muted" />
       </button>
-      {open && <DropdownMenu items={items} anchorRef={anchorRef} onClose={close} />}
+      {open && (
+        <DropdownMenu items={items} scrollItems={branchItems} scrollPlacement="after" anchorRef={anchorRef} onClose={close} />
+      )}
       {creating && (
         <PromptDialog
           title="Create New Branch"
