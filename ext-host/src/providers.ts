@@ -1,6 +1,8 @@
 //! Language feature providers registered by extensions, and the requests the
 //! UI makes to them (completion, hover, definition, ...).
 
+import { decodeBinary } from "./binary";
+import { globToRegExp } from "./glob";
 import { documentFor } from "./documents";
 import * as dto from "./dto";
 import * as rpc from "./rpc";
@@ -11,12 +13,16 @@ import {
   Color,
   CompletionItem,
   CompletionTriggerKind,
+  DataTransfer,
+  DataTransferItem,
   Diagnostic,
   Disposable,
+  DocumentDropOrPasteEditKind,
   InlineCompletionTriggerKind,
   Range,
   SignatureHelpTriggerKind,
   SnippetString,
+  Uri,
 } from "./types";
 
 export type DocumentSelector =
@@ -28,8 +34,13 @@ interface Registration {
   kind: string;
   provider: any;
   extension: string;
+  /** The UI registers by language only; scheme and pattern are checked here before asking. */
+  selector: DocumentSelector;
   /** Completion items of the last result, for `resolveCompletionItem`. */
   lastItems?: CompletionItem[];
+  /** Call or type hierarchy items the UI shows, by id: expanding one asks the provider with it. */
+  items?: Map<number, unknown>;
+  nextItem?: number;
 }
 
 const registrations = new Map<number, Registration>();
@@ -47,21 +58,151 @@ function selectorLanguages(selector: DocumentSelector): string[] {
   return [...languages];
 }
 
-export function match(selector: DocumentSelector, document: { languageId: string }): number {
-  const languages = selectorLanguages(selector);
-  if (languages.includes(document.languageId)) return 10;
-  return languages.includes("*") ? 5 : 0;
+type SelectorDocument = { languageId: string; uri?: { scheme: string; fsPath: string; path: string } };
+
+/** Whether `pattern` (a glob, or a `RelativePattern`) matches the document's path, as VS Code does. */
+function matchesPattern(pattern: unknown, uri: SelectorDocument["uri"]): boolean {
+  if (!uri) return false;
+  const path = (uri.scheme === "file" ? uri.fsPath : uri.path).replace(/\\/g, "/");
+  if (typeof pattern === "string") return globToRegExp(pattern.replace(/\\/g, "/")).test(path);
+  if (pattern && typeof pattern === "object" && typeof (pattern as any).pattern === "string") {
+    const { baseUri, base, pattern: glob } = pattern as { baseUri?: { fsPath: string; path: string; scheme: string }; base?: string; pattern: string };
+    const basePath = (baseUri ? (baseUri.scheme === "file" ? baseUri.fsPath : baseUri.path) : (base ?? "")).replace(/\\/g, "/").replace(/\/+$/, "");
+    const prefix = `${basePath}/`;
+    const same = process.platform === "win32" ? path.toLowerCase().startsWith(prefix.toLowerCase()) : path.startsWith(prefix);
+    return same && globToRegExp(glob.replace(/\\/g, "/")).test(path.slice(prefix.length));
+  }
+  return false;
+}
+
+/**
+ * VS Code's `languages.match` score: 10 for an exact match, 5 for a `*` match, 0 when
+ * the selector does not apply. A filter's language, scheme and pattern must all match;
+ * a filter with none of them (or for notebooks only) matches nothing.
+ */
+export function match(selector: DocumentSelector, document: SelectorDocument): number {
+  if (Array.isArray(selector)) return Math.max(0, ...selector.map((s) => match(s, document)));
+  if (typeof selector === "string") return selector === document.languageId ? 10 : selector === "*" ? 5 : 0;
+  if (!selector) return 0;
+  const { language, scheme, pattern, notebookType } = selector;
+  if (!language && !scheme && !pattern && !notebookType) return 0;
+  // Documents here are never notebook cells.
+  if (notebookType) return 0;
+  let score = 0;
+  if (scheme) {
+    if (scheme === document.uri?.scheme) score = 10;
+    else if (scheme === "*") score = 5;
+    else return 0;
+  }
+  if (language) {
+    if (language === document.languageId) score = 10;
+    else if (language === "*") score = Math.max(score, 5);
+    else return 0;
+  }
+  if (pattern) {
+    if (matchesPattern(pattern, document.uri)) score = 10;
+    else return 0;
+  }
+  return score;
 }
 
 export function register(kind: string, extension: string, selector: DocumentSelector, provider: any, metadata?: unknown) {
   const handle = nextHandle++;
-  registrations.set(handle, { kind, provider, extension });
+  registrations.set(handle, { kind, provider, extension, selector });
   rpc.notify("providers/register", { handle, kind, languages: selectorLanguages(selector), metadata, extension });
+  // Semantic tokens and inline values say when they should be asked again.
+  const event = provider?.onDidChangeSemanticTokens ?? provider?.onDidChangeInlineValues;
+  const subscription = typeof event === "function" ? event(() => rpc.notify("providers/changed", { handle })) : undefined;
   return new Disposable(() => {
+    subscription?.dispose?.();
     registrations.delete(handle);
     rpc.notify("providers/unregister", { handle });
   });
 }
+
+/** A call or type hierarchy item for the UI; the item itself stays here, under its id. */
+function hierarchyItem(registration: Registration, item: any) {
+  const id = (registration.nextItem = (registration.nextItem ?? 0) + 1);
+  (registration.items ??= new Map()).set(id, item);
+  return {
+    id,
+    name: item.name,
+    kind: item.kind,
+    detail: item.detail || undefined,
+    uri: item.uri.toString(),
+    range: dto.range(item.range),
+    selectionRange: dto.range(item.selectionRange),
+    deprecated: item.tags?.includes(1) || undefined,
+  };
+}
+
+interface DataTransferEntryDto {
+  mime: string;
+  value?: unknown;
+  file?: { name: string; uri?: string; data?: unknown };
+}
+
+/** The UI's clipboard or drop contents as a `vscode.DataTransfer`. */
+function dataTransfer(entries: DataTransferEntryDto[] | undefined): DataTransfer {
+  const transfer = new DataTransfer();
+  for (const entry of entries ?? []) {
+    const file = entry.file;
+    transfer.set(
+      entry.mime,
+      new DataTransferItem(
+        entry.value ?? "",
+        file && {
+          name: file.name,
+          uri: file.uri ? Uri.parse(file.uri) : undefined,
+          data: async () => (decodeBinary(file.data) as Uint8Array | undefined) ?? new Uint8Array(),
+        },
+      ),
+    );
+  }
+  return transfer;
+}
+
+/** Drop or paste edits for the UI, resolved first (the UI applies them as they are). */
+async function dropOrPasteEdits(result: any, resolve: ((edit: any) => any) | undefined) {
+  const list: any[] = Array.isArray(result) ? result : result ? [result] : [];
+  const resolved = await Promise.all(list.map(async (edit) => (resolve ? ((await resolve(edit)) ?? edit) : edit)));
+  return resolved.map((edit) => ({
+    title: edit.title,
+    kind: edit.kind?.value,
+    insertText: typeof edit.insertText === "string" ? edit.insertText : undefined,
+    snippet: edit.insertText instanceof SnippetString ? edit.insertText.value : undefined,
+    additionalEdit: edit.additionalEdit ? dto.workspaceEdit(edit.additionalEdit) : undefined,
+    // Kinds now; older extensions give `{ mimeType }`.
+    yieldTo: edit.yieldTo?.map((y: any) => (y instanceof DocumentDropOrPasteEditKind ? { kind: y.value } : y?.mimeType ? { mimeType: y.mimeType } : { kind: String(y?.value ?? y) })),
+  }));
+}
+
+/** Methods about hierarchy items the UI got before (expanding a node): no document involved. */
+async function provideForItem(registration: Registration, params: any) {
+  const { provider } = registration;
+  const token = new CancellationTokenSource().token;
+  const item = registration.items?.get(params.item);
+  if (!item) return [];
+  const related = (list: any[] | null | undefined, pick: (entry: any) => { item: unknown; ranges?: Range[] }) =>
+    (list ?? []).map((entry) => {
+      const { item: other, ranges } = pick(entry);
+      return { item: hierarchyItem(registration, other), ranges: (ranges ?? []).map(dto.range) };
+    });
+  switch (params.method) {
+    case "incomingCalls":
+      return related(await provider.provideCallHierarchyIncomingCalls(item, token), (c) => ({ item: c.from, ranges: c.fromRanges }));
+    case "outgoingCalls":
+      return related(await provider.provideCallHierarchyOutgoingCalls(item, token), (c) => ({ item: c.to, ranges: c.fromRanges }));
+    case "supertypes":
+      return related(await provider.provideTypeHierarchySupertypes(item, token), (t) => ({ item: t }));
+    case "subtypes":
+      return related(await provider.provideTypeHierarchySubtypes(item, token), (t) => ({ item: t }));
+    default:
+      throw new Error(`Unsupported provider method ${params.method}`);
+  }
+}
+
+const ITEM_METHODS = new Set(["incomingCalls", "outgoingCalls", "supertypes", "subtypes"]);
 
 /** Turns a diagnostic sent back by the UI (in a code action context) into a `vscode.Diagnostic`. */
 function toDiagnostic(d: any) {
@@ -90,8 +231,11 @@ async function provide(params: any) {
       range: s.location?.range ? dto.range(s.location.range) : undefined,
     }));
   }
+  if (ITEM_METHODS.has(params.method)) return provideForItem(registration, params);
   const document = documentFor(params.uri);
   if (!document) return null;
+  // e.g. `{ pattern: "**/.github/workflows/*.yml" }`: registered for every language in the UI.
+  if (match(registration.selector, document) === 0) return null;
   const position = params.position ? dto.toPosition(params.position) : undefined;
   const range = params.range ? dto.toRange(params.range) : undefined;
 
@@ -264,6 +408,65 @@ async function provide(params: any) {
         textEdit: p.textEdit ? dto.textEdit(p.textEdit) : undefined,
         additionalTextEdits: p.additionalTextEdits?.map(dto.textEdit),
       }));
+    }
+    case "semanticTokens": {
+      // A range provider alone answers for the whole document: the UI colours whole documents.
+      const result = provider.provideDocumentSemanticTokens
+        ? await provider.provideDocumentSemanticTokens(document, token)
+        : await provider.provideDocumentRangeSemanticTokens(document, new Range(0, 0, document.lineCount, 0), token);
+      const data = result?.data;
+      return data ? { data: Array.from(data as ArrayLike<number>) } : null;
+    }
+    case "prepareCallHierarchy":
+    case "prepareTypeHierarchy": {
+      // A new hierarchy: the items of the previous one are no longer shown.
+      registration.items = new Map();
+      const result =
+        params.method === "prepareCallHierarchy"
+          ? await provider.prepareCallHierarchy(document, position, token)
+          : await provider.prepareTypeHierarchy(document, position, token);
+      const list = Array.isArray(result) ? result : result ? [result] : [];
+      return list.map((item: any) => hierarchyItem(registration, item));
+    }
+    case "evaluatableExpression": {
+      const result = await provider.provideEvaluatableExpression(document, position, token);
+      return result ? { range: dto.range(result.range), expression: result.expression } : null;
+    }
+    case "inlineValues": {
+      const context = { frameId: params.frameId, stoppedLocation: dto.toRange(params.stoppedLocation) };
+      const values = (await provider.provideInlineValues(document, range, context, token)) ?? [];
+      return values.map((v: any) => {
+        const at = dto.range(v.range);
+        if (typeof v.text === "string") return { kind: "text", range: at, text: v.text };
+        if ("caseSensitiveLookup" in v) return { kind: "variable", range: at, variableName: v.variableName, caseSensitive: v.caseSensitiveLookup };
+        return { kind: "expression", range: at, expression: v.expression };
+      });
+    }
+    case "drop": {
+      const result = await provider.provideDocumentDropEdits(document, position, dataTransfer(params.dataTransfer), token);
+      return dropOrPasteEdits(result, provider.resolveDocumentDropEdit && ((e: any) => provider.resolveDocumentDropEdit(e, token)));
+    }
+    case "paste": {
+      const ranges = (params.ranges ?? []).map(dto.toRange);
+      const only = params.only ? new DocumentDropOrPasteEditKind(params.only) : undefined;
+      const result = await provider.provideDocumentPasteEdits(
+        document,
+        ranges,
+        dataTransfer(params.dataTransfer),
+        { only, triggerKind: params.triggerKind ?? 0 },
+        token,
+      );
+      return dropOrPasteEdits(result, provider.resolveDocumentPasteEdit && ((e: any) => provider.resolveDocumentPasteEdit(e, token)));
+    }
+    case "preparePaste": {
+      // On copy: the provider adds its own data (e.g. the imports the copied code needs),
+      // which comes back with the paste.
+      if (!provider.prepareDocumentPaste) return null;
+      const transfer = dataTransfer(params.dataTransfer);
+      await provider.prepareDocumentPaste(document, (params.ranges ?? []).map(dto.toRange), transfer, token);
+      const entries: DataTransferEntryDto[] = [];
+      for (const [mime, item] of transfer) if (!item.asFile()) entries.push({ mime, value: item.value });
+      return entries;
     }
     default:
       throw new Error(`Unsupported provider method ${params.method}`);

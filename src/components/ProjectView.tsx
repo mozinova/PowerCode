@@ -34,6 +34,7 @@ import { GIT_COLORS, gitStateOf, useGit } from "../git/store";
 import { useWorkspace } from "../state/workspace";
 import { savedExplorer, saveExplorer } from "../state/session";
 import { watchFolders } from "../editor/externalChanges";
+import { fileUri } from "../editor/uris";
 import { FileIcon } from "./FileIcon";
 import { ContextMenu, type MenuEntry } from "./Menu";
 import { IconButton, ToolWindowHeader } from "./ui";
@@ -544,6 +545,14 @@ function Tree({ root }: { root: string }) {
                   if (row.entry.isDir) toggle(row.entry.path);
                 }}
                 onDoubleClick={() => !row.entry.isDir && openEditor(row.entry.path)}
+                // Files can be dragged into an editor (a path, or what an extension makes of
+                // it: a Markdown link, an import), as in VS Code.
+                draggable={!row.entry.isDir}
+                onDragStart={(e) => {
+                  e.dataTransfer.effectAllowed = "copy";
+                  e.dataTransfer.setData("text/uri-list", fileUri(row.entry.path).toString());
+                  e.dataTransfer.setData("text/plain", row.entry.path);
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault();
                   e.stopPropagation();

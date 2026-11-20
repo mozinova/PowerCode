@@ -12,6 +12,10 @@ export interface EditorTheme {
   base: monaco.editor.BuiltinTheme;
   colors: Record<string, string>;
   tokenColors: ThemeSetting[];
+  /** Whether extensions' semantic tokens are shown (VS Code's "configuredByTheme"). */
+  semanticHighlighting?: boolean;
+  /** Styles of semantic token types (`"parameter"`, `"variable.readonly:java"`, ...). */
+  semanticTokenColors?: Record<string, unknown>;
 }
 
 /** IntelliJ New UI "Dark" editor colour scheme, expressed as a VS Code theme. */
@@ -137,7 +141,7 @@ const MONARCH_SCOPES: [string, string[]][] = [
 ];
 
 /** Finds the colour a theme gives `scope`, matching simple selectors by prefix. */
-function resolveScope(settings: ThemeSetting[], scope: string): ThemeSetting["settings"] | null {
+export function resolveScope(settings: ThemeSetting[], scope: string): ThemeSetting["settings"] | null {
   let best: ThemeSetting["settings"] | null = null;
   let bestLength = -1;
   for (const setting of settings) {
@@ -213,7 +217,11 @@ export async function applyEditorTheme(theme: EditorTheme) {
   activeBase = theme.base;
   defineMonacoTheme(theme, []);
   monaco.editor.setTheme(theme.id);
-  const textMateRules = await setTextMateTheme({ name: theme.label, settings: theme.tokenColors });
+  const textMateRules = await setTextMateTheme(
+    { name: theme.label, settings: theme.tokenColors },
+    // The built-in theme has semantic highlighting on, as VS Code's default themes do.
+    { enabled: theme.semanticHighlighting ?? theme.id === POWERCODE_DARK.id, rules: theme.semanticTokenColors ?? {} },
+  );
   defineMonacoTheme(theme, textMateRules);
   monaco.editor.setTheme(theme.id);
 }

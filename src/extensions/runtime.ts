@@ -186,13 +186,15 @@ function registerSnippets(extensionId: string, language: string, path: string) {
 async function loadThemeFile(
   extensionId: string,
   path: string,
-): Promise<Pick<EditorTheme, "colors" | "tokenColors">> {
+): Promise<Pick<EditorTheme, "colors" | "tokenColors" | "semanticHighlighting" | "semanticTokenColors">> {
   const raw = await readJsonc<any>(extensionId, path);
-  const base = raw.include
+  const base: Pick<EditorTheme, "colors" | "tokenColors" | "semanticHighlighting" | "semanticTokenColors"> = raw.include
     ? await loadThemeFile(extensionId, dirname(path) + raw.include)
     : { colors: {}, tokenColors: [] };
   return {
     colors: { ...base.colors, ...raw.colors },
+    semanticHighlighting: typeof raw.semanticHighlighting === "boolean" ? raw.semanticHighlighting : base.semanticHighlighting,
+    semanticTokenColors: { ...base.semanticTokenColors, ...(raw.semanticTokenColors && typeof raw.semanticTokenColors === "object" ? raw.semanticTokenColors : {}) },
     // `tokenColors` may also point to a .tmTheme file, which is not supported yet.
     tokenColors: [
       ...base.tokenColors,

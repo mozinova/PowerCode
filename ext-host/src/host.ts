@@ -8,6 +8,7 @@ import Module from "node:module";
 import { activateForCommand, createApi, executeCommand, extensionStates, hostEvents, setCommandActivator } from "./api";
 import { documentFor, documents, onDidChange, onDidClose, onDidOpen, onDidSave, TextDocumentImpl } from "./documents";
 import { matchesGlob } from "./glob";
+import * as dto from "./dto";
 import * as providers from "./providers";
 import * as rpc from "./rpc";
 import * as views from "./views";
@@ -380,7 +381,9 @@ rpc.onNotification("activate", (params: { event: string }) => activateByEvent(pa
 
 rpc.onRequest("commands/execute", async (params: { command: string; args?: unknown[] }) => {
   await activateForCommand(params.command);
-  const result = await executeCommand(params.command, ...(params.args ?? []).map(revive));
+  // Arguments kept here for the UI (see dto.command) come back as they were.
+  const args = dto.commandArgs(params.args) ?? (params.args ?? []).map(revive);
+  const result = await executeCommand(params.command, ...args);
   return Uri.isUri(result) ? { $uri: result.toString() } : result ?? null;
 });
 

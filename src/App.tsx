@@ -3,7 +3,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { closeActiveTab, lastRoot, openFolder, openSettings, saveActive } from "./actions";
 import { isNewWindow, listenForOpenRequests, openFiles, takeStartupRequests } from "./cli";
 import { MainToolbar, StatusBar } from "./components/Chrome";
-import { EditorArea } from "./components/EditorArea";
+import { EditorArea, activeEditor } from "./components/EditorArea";
 import { CommitView } from "./components/CommitView";
 import { ExtensionsView } from "./components/ExtensionsView";
 import { focusCommandPalette, focusFileSearch, focusSymbolSearch } from "./components/FileSearch";
@@ -18,6 +18,10 @@ import { DebugConsole } from "./components/DebugConsole";
 import { DebugView } from "./components/DebugView";
 import { TestingView } from "./components/TestingView";
 import { ChatView } from "./components/ChatView";
+import { HierarchyView } from "./components/HierarchyView";
+import { showHierarchy } from "./exthost/hierarchy";
+import { startSemanticTokens } from "./editor/semanticTokens";
+import { supportSnippetEdits } from "./editor/monacoInternals";
 import { ExtensionViewContainer } from "./components/ExtensionViews";
 import { HostDialogs } from "./components/HostDialogs";
 import { OutputPanel } from "./components/OutputPanel";
@@ -51,6 +55,7 @@ const TOOL_WINDOWS: Partial<Record<ToolId, ReactNode>> = {
   debug: <DebugView />,
   testing: <TestingView />,
   chat: <ChatView />,
+  hierarchy: <HierarchyView />,
 };
 
 /** The content of a tool window, in whichever sidebar it is. */
@@ -101,6 +106,7 @@ function useGlobalShortcuts() {
       else if (e.altKey && !ctrl && e.key === "F12") toggleBottomTool("terminal");
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "d") toggleTool("debug");
       else if (ctrl && e.shiftKey && e.key.toLowerCase() === "y") toggleBottomTool("debug");
+      else if (e.shiftKey && e.altKey && !ctrl && e.code === "KeyH") void showHierarchy("call", activeEditor());
       else if (debugShortcut(e)) {
         // Handled.
       }
@@ -149,6 +155,19 @@ export default function App() {
     startExternalChangeWatcher();
     startSessionSaving();
     startWindowIdentity();
+    startSemanticTokens();
+    supportSnippetEdits();
+    // Drag and drop is the page's (`dragDropEnabled: false`, so editors take drops and
+    // extensions' drop providers run). Files dropped anywhere else must not make the
+    // webview open them.
+    window.addEventListener("dragover", (e) => {
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    });
+    window.addEventListener("drop", (e) => {
+      if (!e.defaultPrevented) e.preventDefault();
+    });
     // A folder given on the command line (or "Open with") wins over the last one.
     listenForOpenRequests();
     void Promise.all([takeStartupRequests(), isNewWindow()]).then(async ([requests, newWindow]) => {

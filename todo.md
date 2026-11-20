@@ -30,14 +30,18 @@ and the surface generated from `@types/vscode` (`bun run gen:vscode-surface`).
 
 ## Languages
 
-- [ ] `registerDocumentSemanticTokensProvider` / `registerDocumentRangeSemanticTokensProvider`
-      — *stub*. Clash with the TextMate colouring, which already uses Monaco's semantic
-      tokens; needs merging the two token sources.
-- [ ] `registerCallHierarchyProvider` — *stub* (Call Hierarchy view).
-- [ ] `registerTypeHierarchyProvider` — *stub* (Type Hierarchy view).
-- [ ] `registerEvaluatableExpressionProvider` — *stub* (debug hover on expressions).
-- [ ] `registerInlineValuesProvider` — *stub* (variable values inline while debugging).
-- [ ] `registerDocumentDropEditProvider` / `registerDocumentPasteEditProvider` — *stub*.
+- [x] `registerDocumentSemanticTokensProvider` / `registerDocumentRangeSemanticTokensProvider`
+      — merged over the TextMate colouring (`src/editor/semanticTokens.ts`), styled by the
+      theme's `semanticTokenColors` or the TextMate scope of the type. Not yet: delta
+      results (`provideDocumentSemanticTokensEdits`; the full result is asked instead) and
+      range requests for the visible part only (range providers are asked for the whole file).
+- [x] `registerCallHierarchyProvider` / `registerTypeHierarchyProvider` — Hierarchy tool
+      window (Show Call Hierarchy, Shift+Alt+H; Show Type Hierarchy).
+- [x] `registerEvaluatableExpressionProvider` — decides what the debug hover evaluates.
+- [x] `registerInlineValuesProvider` — values at the end of lines while paused.
+- [x] `registerDocumentDropEditProvider` / `registerDocumentPasteEditProvider` — through
+      Monaco's drop and paste controllers (`src/editor/monacoInternals.ts`). Not yet: the
+      "Paste As…" / "Drop As…" choice widget's commands in PowerCode's menus.
 
 ## Tasks
 

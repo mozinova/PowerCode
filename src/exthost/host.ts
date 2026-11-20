@@ -46,7 +46,8 @@ import { newTerminal, setActiveTerminal, type TerminalSession } from "../termina
 import { registerTerminalHandlers, resetTerminals, syncTerminals } from "./terminals";
 import { runTask, terminateTask } from "./tasks";
 import { cancelAllDialogs, showInputBox, showQuickPick } from "./dialogs";
-import { pathFromUri, registerProvider, resetLanguageFeatures, setDiagnostics, setDocumentFlusher, unregisterProvider } from "./languages";
+import { resetHierarchy } from "./hierarchy";
+import { pathFromUri, providerChanged, registerProvider, resetLanguageFeatures, setDiagnostics, setDocumentFlusher, unregisterProvider } from "./languages";
 import * as rpc from "./rpc";
 import { openUserSettings, userSettingsPath } from "./settings";
 import { loadUserSettings, setUserSetting, useUserSettings } from "../settings/store";
@@ -151,6 +152,8 @@ async function shutdownGracefully() {
 
 function forgetHostState() {
   resetLanguageFeatures();
+  // The items behind the hierarchy shown lived in the host.
+  resetHierarchy();
   cancelAllDialogs();
   syncedDocuments.forEach((d) => d.dispose());
   syncedDocuments.clear();
@@ -788,6 +791,7 @@ function registerHandlers() {
   rpc.onNotification("ready", ({ node }) => log("info", `Extension host ready (Node ${node})`));
   rpc.onNotification("providers/register", registerProvider);
   rpc.onNotification("providers/unregister", ({ handle }) => unregisterProvider(handle));
+  rpc.onNotification("providers/changed", ({ handle }) => providerChanged(handle));
   rpc.onNotification("diagnostics/set", ({ owner, uri, diagnostics }) => setDiagnostics(owner, uri, diagnostics));
 
   rpc.onNotification("statusBar/update", (item: StatusItem & { visible: boolean }) =>

@@ -47,8 +47,43 @@ export function textEdit(edit: TextEdit) {
   return { range: range(edit.range), newText: edit.newText };
 }
 
+/** Whether `value` survives JSON as it is: primitives, arrays and plain objects, no cycles. */
+function isPlainJson(value: unknown, seen = new Set<object>()): boolean {
+  if (value === null || ["string", "number", "boolean", "undefined"].includes(typeof value)) return true;
+  if (typeof value !== "object" || seen.has(value as object)) return false;
+  const proto = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && proto !== Object.prototype && proto !== null) return false;
+  seen.add(value as object);
+  const ok = Object.values(value as object).every((v) => isPlainJson(v, seen));
+  seen.delete(value as object);
+  return ok;
+}
+
+/**
+ * Command arguments that JSON cannot carry (the completion item itself, Uris, Ranges,
+ * Locations, objects with cycles) stay here, as in VS Code; the UI gets `{ $args: id }`
+ * and sends it back when it runs the command (see `commandArgs`). The oldest are
+ * dropped past a bound, since every completion item may bring one.
+ */
+const keptArgs = new Map<number, unknown[]>();
+const MAX_KEPT_ARGS = 5000;
+let nextArgs = 1;
+
 export function command(cmd: Command | undefined) {
-  return cmd ? { title: cmd.title, command: cmd.command, arguments: cmd.arguments } : undefined;
+  if (!cmd) return undefined;
+  const args = cmd.arguments;
+  if (!args || args.length === 0 || isPlainJson(args)) return { title: cmd.title, command: cmd.command, arguments: args };
+  const id = nextArgs++;
+  keptArgs.set(id, args);
+  if (keptArgs.size > MAX_KEPT_ARGS) keptArgs.delete(keptArgs.keys().next().value!);
+  return { title: cmd.title, command: cmd.command, arguments: [{ $args: id }] };
+}
+
+/** The arguments a command DTO stood for (`[{ $args: id }]`), or null when they are not kept ones. */
+export function commandArgs(args: unknown[] | undefined): unknown[] | null {
+  const ref = args?.length === 1 ? (args[0] as { $args?: unknown } | null) : null;
+  if (!ref || typeof ref !== "object" || typeof ref.$args !== "number") return null;
+  return keptArgs.get(ref.$args) ?? [];
 }
 
 export function workspaceEdit(edit: WorkspaceEdit) {

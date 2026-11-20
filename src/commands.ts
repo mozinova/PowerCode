@@ -5,6 +5,8 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { closeActiveTab, closeFolder, closeRemoteConnection, closeTabs, openFolder, openSettings, pickAndInstallVsix, reopenWith, saveActive } from "./actions";
 import { focusFindInFiles } from "./components/SearchView";
 import { focusSymbolSearch } from "./components/FileSearch";
+import { activeEditor } from "./components/EditorArea";
+import { hasHierarchy, showHierarchy } from "./exthost/hierarchy";
 import { configureTasks, runTask, terminateTask } from "./exthost/tasks";
 import { manageAccounts } from "./exthost/accounts";
 import { DEBUG, RUN, runAllTests } from "./exthost/testing";
@@ -123,6 +125,22 @@ export const COMMANDS: Command[] = [
   { id: "accounts.manage", category: "Accounts", label: "Manage Accounts…", run: () => void manageAccounts() },
   { id: "tasks.configure", category: "Tasks", label: "Configure Tasks (tasks.json)", when: hasFolder, run: () => void configureTasks() },
   { id: "go.symbol", category: "Go", label: "Go to Symbol in Workspace…", shortcut: "Ctrl+T", when: hasFolder, run: () => focusSymbolSearch() },
+  {
+    id: "editor.showCallHierarchy",
+    category: "Go",
+    label: "Show Call Hierarchy",
+    shortcut: "Shift+Alt+H",
+    when: () => hasHierarchy("call", activeEditor()?.getModel()),
+    run: () => void showHierarchy("call", activeEditor()),
+  },
+  {
+    id: "editor.showTypeHierarchy",
+    category: "Go",
+    label: "Show Type Hierarchy",
+    when: () => hasHierarchy("type", activeEditor()?.getModel()),
+    run: () => void showHierarchy("type", activeEditor()),
+  },
+  { id: "view.hierarchy", category: "View", label: "Show Hierarchy", run: () => showTool("hierarchy") },
   { id: "view.remote", category: "View", label: "Show Remote Hosts", run: () => showTool("remote") },
   { id: "view.extensions", category: "View", label: "Show Extensions", shortcut: "Alt+2", run: () => showTool("extensions") },
   {

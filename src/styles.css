@@ -331,6 +331,12 @@ body {
 .pc-frame-line {
   background: rgb(224 184 76 / 0.16);
 }
+/* Variable values at the end of lines while paused (an extension's inline values), as in VS Code. */
+.pc-inline-value {
+  color: rgb(134 138 145 / 0.9);
+  font-style: italic;
+  margin-left: 1.5em;
+}
 /* Lines an extension allows commenting on: a faint bar, and a "+" on hover (click starts a thread). */
 .pc-comment-range {
   border-left: 3px solid rgb(134 138 145 / 0.25);

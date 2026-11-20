@@ -2,6 +2,16 @@
 //! extension host) to Monaco, and their diagnostics to editor markers.
 
 import { monaco } from "../editor/monaco";
+import {
+  dataTransferOf,
+  hierarchicalKind,
+  registerDropEditProvider,
+  registerPasteEditProvider,
+  valueItem,
+  type DataTransfer,
+  type DropOrPasteEdit,
+} from "../editor/monacoInternals";
+import { extensionServes, extensionStopsServing } from "../editor/builtinLanguages";
 import { loadModel } from "../editor/models";
 import { uriToPath } from "../editor/uris";
 import * as rpc from "./rpc";
@@ -410,9 +420,153 @@ function createProvider(r: Registration, language: string): monaco.IDisposable |
           }));
         },
       });
+    case "drop":
+      return dropProvider(r, language);
+    case "paste":
+      return pasteProvider(r, language);
     default:
       return null;
   }
+}
+
+// ---- Drop and paste -------------------------------------------------------------------
+
+/** Files larger than this reach providers without their bytes (`data()` is empty). */
+const MAX_TRANSFER_FILE_BYTES = 20 * 1024 * 1024;
+
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
+
+/** Clipboard or drop contents for the host (files with their bytes, as `$pcBytes`). */
+async function dataTransferDto(transfer: DataTransfer) {
+  const entries: { mime: string; value?: unknown; file?: { name: string; uri?: string; data?: unknown } }[] = [];
+  for (const [mime, item] of transfer) {
+    const file = item.asFile();
+    if (file) {
+      const data = await file.data().catch(() => null);
+      entries.push({
+        mime,
+        file: {
+          name: file.name,
+          uri: file.uri?.toString(),
+          data: data && data.byteLength <= MAX_TRANSFER_FILE_BYTES ? { $pcBytes: base64(data), kind: "Uint8Array" } : undefined,
+        },
+      });
+    } else {
+      entries.push({ mime, value: item.value !== undefined ? item.value : await item.asString() });
+    }
+  }
+  return entries;
+}
+
+function dropOrPasteEdits(list: any[] | null, mimeTypes: string[]): DropOrPasteEdit[] {
+  return (list ?? []).map((e) => ({
+    title: e.title ?? "",
+    kind: e.kind !== undefined ? hierarchicalKind(e.kind) : undefined,
+    insertText: e.snippet !== undefined ? { snippet: e.snippet } : (e.insertText ?? ""),
+    additionalEdit: e.additionalEdit ? workspaceEdit(e.additionalEdit) : undefined,
+    yieldTo: e.yieldTo?.map((y: any) => (y.mimeType ? { mimeType: y.mimeType } : { kind: hierarchicalKind(y.kind) })),
+    handledMimeType: mimeTypes.length === 1 ? mimeTypes[0] : undefined,
+  }));
+}
+
+function dropProvider(r: Registration, language: string): monaco.IDisposable {
+  const { handle } = r;
+  const mimeTypes: string[] = r.metadata?.mimeTypes ?? ["*/*"];
+  return registerDropEditProvider(language, {
+    id: `exthost.${handle}`,
+    dropMimeTypes: mimeTypes,
+    providedDropEditKinds: (r.metadata?.kinds ?? []).map(hierarchicalKind),
+    async provideDocumentDropEdits(model, position, dataTransfer) {
+      const edits = await provide<any[]>(handle, "drop", model, {
+        position: toPosition(position),
+        dataTransfer: await dataTransferDto(dataTransfer),
+      });
+      return { edits: dropOrPasteEdits(edits, mimeTypes), dispose() {} };
+    },
+  });
+}
+
+function pasteProvider(r: Registration, language: string): monaco.IDisposable {
+  const { handle } = r;
+  const mimeTypes: string[] = r.metadata?.mimeTypes ?? [];
+  return registerPasteEditProvider(language, {
+    id: `exthost.${handle}`,
+    copyMimeTypes: r.metadata?.copyMimeTypes ?? [],
+    pasteMimeTypes: mimeTypes,
+    providedPasteEditKinds: (r.metadata?.kinds ?? []).map(hierarchicalKind),
+    prepareDocumentPaste: r.metadata?.prepare
+      ? async (model, ranges, dataTransfer) => {
+          const entries = await provide<{ mime: string; value: unknown }[] | null>(handle, "preparePaste", model, {
+            ranges: ranges.map(fromRange),
+            dataTransfer: await dataTransferDto(dataTransfer),
+          });
+          return entries ? dataTransferOf(entries.map((e) => [e.mime, valueItem(e.value)])) : undefined;
+        }
+      : undefined,
+    async provideDocumentPasteEdits(model, ranges, dataTransfer, context) {
+      const edits = await provide<any[]>(handle, "paste", model, {
+        ranges: ranges.map(fromRange),
+        dataTransfer: await dataTransferDto(dataTransfer),
+        only: context.only?.value,
+        triggerKind: context.triggerKind,
+      });
+      return { edits: dropOrPasteEdits(edits, mimeTypes), dispose() {} };
+    },
+  });
+}
+
+// ---- Features PowerCode calls itself ----------------------------------------------------
+
+/**
+ * Providers with no Monaco registry behind them: semantic tokens (merged with the
+ * TextMate colouring), call and type hierarchies (the Hierarchy view) and the
+ * debugger's hover expressions and inline values.
+ */
+const FEATURE_KINDS = new Set(["semanticTokens", "rangeSemanticTokens", "callHierarchy", "typeHierarchy", "evaluatableExpression", "inlineValues"]);
+
+export interface FeatureProvider {
+  handle: number;
+  kind: string;
+  languages: string[];
+  metadata?: any;
+}
+
+const features = new Map<number, FeatureProvider>();
+const featureListeners = new Set<(kind: string, handle: number) => void>();
+
+/** The providers of `kind` for a language, in registration order. */
+export function featureProviders(kind: string, languageId: string): FeatureProvider[] {
+  return [...features.values()].filter((f) => f.kind === kind && (f.languages.includes(languageId) || f.languages.includes("*")));
+}
+
+/** Called when a feature provider comes, goes or says its results changed. */
+export function onFeatureChange(listener: (kind: string, handle: number) => void): () => void {
+  featureListeners.add(listener);
+  return () => featureListeners.delete(listener);
+}
+
+function featureChanged(feature: FeatureProvider) {
+  for (const listener of featureListeners) listener(feature.kind, feature.handle);
+}
+
+/** A provider's results changed (`onDidChangeSemanticTokens`, `onDidChangeInlineValues`). */
+export function providerChanged(handle: number) {
+  const feature = features.get(handle);
+  if (feature) featureChanged(feature);
+}
+
+/** Asks a feature provider about `model` (it sees the model's latest text). */
+export function provideFeature<T>(handle: number, method: string, model: monaco.editor.ITextModel, extra: object = {}) {
+  return provide<T>(handle, method, model, extra);
+}
+
+/** Asks a hierarchy provider about an item it gave before. */
+export function provideForItem<T>(handle: number, method: string, item: number) {
+  return rpc.request<T>("providers/provide", { handle, method, item });
 }
 
 function revive(pattern: { source: string; flags?: string }) {
@@ -453,9 +607,25 @@ export async function searchWorkspaceSymbols(query: string): Promise<WorkspaceSy
 }
 
 export function registerProvider(r: Registration) {
+  // Monaco's own TypeScript, JSON, CSS or HTML service gives way to the extension's.
+  extensionServes(r.handle, r.kind, r.languages);
   if (r.kind === "workspaceSymbols") {
     workspaceSymbolProviders.add(r.handle);
     registrations.set(r.handle, [{ dispose: () => workspaceSymbolProviders.delete(r.handle) }]);
+    return;
+  }
+  if (FEATURE_KINDS.has(r.kind)) {
+    const feature: FeatureProvider = { handle: r.handle, kind: r.kind, languages: r.languages, metadata: r.metadata };
+    features.set(r.handle, feature);
+    registrations.set(r.handle, [
+      {
+        dispose: () => {
+          features.delete(r.handle);
+          featureChanged(feature);
+        },
+      },
+    ]);
+    featureChanged(feature);
     return;
   }
   // `*` applies to every language: Monaco's selector accepts it too.
@@ -466,6 +636,7 @@ export function registerProvider(r: Registration) {
 }
 
 export function unregisterProvider(handle: number) {
+  extensionStopsServing(handle);
   registrations.get(handle)?.forEach((d) => d.dispose());
   registrations.delete(handle);
 }

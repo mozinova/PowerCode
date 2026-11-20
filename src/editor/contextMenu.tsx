@@ -8,6 +8,7 @@ import { focusCommandPalette } from "../components/FileSearch";
 import { menuEntries } from "../components/ExtensionViews";
 import { ContextMenu, type MenuEntry } from "../components/Menu";
 import { menuItems } from "../exthost/contributions";
+import { hasHierarchy, showHierarchy } from "../exthost/hierarchy";
 import { useExtensionHost } from "../exthost/state";
 import { isTrue, useContributions } from "../exthost/views";
 import { basename } from "../lib/paths";
@@ -68,6 +69,11 @@ function EditorMenu({ editor, x, y, onClose }: { editor: monaco.editor.ICodeEdit
     action("editor.action.revealDefinition", "Go to Definition", "F12"),
     action("editor.action.goToReferences", "Go to References", "Shift+F12"),
     action("editor.action.peekDefinition", "Peek Definition", "Alt+F12"),
+    // Offered when the language's extension provides them, as in VS Code.
+    ...(hasHierarchy("call", model)
+      ? [{ label: "Show Call Hierarchy", shortcut: "Shift+Alt+H", action: () => void showHierarchy("call", editor) }]
+      : []),
+    ...(hasHierarchy("type", model) ? [{ label: "Show Type Hierarchy", action: () => void showHierarchy("type", editor) }] : []),
     "separator",
     action("editor.action.rename", "Rename Symbol", "F2", true),
     action("editor.action.changeAll", "Change All Occurrences", "Ctrl+F2", true),

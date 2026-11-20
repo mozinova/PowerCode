@@ -1124,14 +1124,47 @@ export class InlineCompletionList {
   constructor(public items: InlineCompletionItem[]) {}
 }
 
+/** A file in a `DataTransfer` (e.g. an image pasted into the editor). */
+export interface DataTransferFile {
+  readonly name: string;
+  readonly uri?: Uri;
+  data(): PromiseLike<Uint8Array>;
+}
+
 export class DataTransferItem {
-  constructor(readonly value: unknown) {}
+  constructor(
+    readonly value: unknown,
+    private readonly file?: DataTransferFile,
+  ) {}
   async asString() {
+    if (this.file) return "";
     return typeof this.value === "string" ? this.value : JSON.stringify(this.value);
   }
-  asFile() {
-    return undefined;
+  asFile(): DataTransferFile | undefined {
+    return this.file;
   }
+}
+
+export class DocumentDropOrPasteEditKind {
+  static readonly sep = ".";
+  static readonly Empty = new DocumentDropOrPasteEditKind("");
+  static readonly Text = new DocumentDropOrPasteEditKind("text");
+  static readonly TextUpdateImports = new DocumentDropOrPasteEditKind("text.updateImports");
+  constructor(readonly value: string) {}
+  append(...parts: string[]) {
+    return new DocumentDropOrPasteEditKind((this.value ? [this.value, ...parts] : parts).join(DocumentDropOrPasteEditKind.sep));
+  }
+  intersects(other: DocumentDropOrPasteEditKind) {
+    return this.contains(other) || other.contains(this);
+  }
+  contains(other: DocumentDropOrPasteEditKind) {
+    return this.value === other.value || this.value === "" || other.value.startsWith(this.value + DocumentDropOrPasteEditKind.sep);
+  }
+}
+
+export enum DocumentPasteTriggerKind {
+  Automatic = 0,
+  PasteAs = 1,
 }
 
 export class DataTransfer {
@@ -1152,14 +1185,21 @@ export class DataTransfer {
 
 export class DocumentDropEdit {
   additionalEdit?: WorkspaceEdit;
-  constructor(public insertText: string | SnippetString) {}
+  yieldTo?: DocumentDropOrPasteEditKind[];
+  constructor(
+    public insertText: string | SnippetString,
+    public title?: string,
+    public kind?: DocumentDropOrPasteEditKind,
+  ) {}
 }
 
 export class DocumentPasteEdit {
   additionalEdit?: WorkspaceEdit;
+  yieldTo?: DocumentDropOrPasteEditKind[];
   constructor(
     public insertText: string | SnippetString,
     public title: string,
+    public kind: DocumentDropOrPasteEditKind,
   ) {}
 }
 

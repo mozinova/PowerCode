@@ -38,6 +38,9 @@ import { FileSearch } from "./FileSearch";
 import { DropdownMenu, type MenuEntry } from "./Menu";
 import { IconButton } from "./ui";
 import { tooltipProps } from "./Tooltip";
+import packageJson from "../../package.json";
+
+const APP_VERSION = packageJson.version;
 
 function MainMenu() {
   const [open, setOpen] = useState(false);
@@ -66,6 +69,9 @@ function MainMenu() {
     { label: "Output", action: () => toggleBottomTool("output") },
     "separator",
     { label: "Settings…", shortcut: "Ctrl+,", action: () => openSettings() },
+    "separator",
+    // The installed version, for bug reports (the release build takes it from the tag).
+    { label: `PowerCode ${APP_VERSION}`, disabled: true, action: () => {} },
   ];
 
   return (

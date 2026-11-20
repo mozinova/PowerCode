@@ -1,4 +1,5 @@
-import { Blocks, Bug, FlaskConical, MessagesSquare, Folder, GitCommitHorizontal, ScrollText, Search, Server, SquareChevronRight, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Blocks, Bug, FlaskConical, ListTree, MessagesSquare, Folder, GitCommitHorizontal, ScrollText, Search, Server, SquareChevronRight, SquareTerminal, type LucideIcon } from "lucide-react";
+import { useHierarchy } from "../exthost/hierarchy";
 import { useRef, type ReactNode } from "react";
 import { create } from "zustand";
 import { countResults, useTesting } from "../exthost/testing";
@@ -34,6 +35,8 @@ function useToolEntries(): ToolEntry[] {
   const failedTests = useTesting((s) => countResults(s.controllers, s.results).failed);
   // Chat shows once an extension offers a chat participant.
   const hasChat = useChat((s) => s.participants.length > 0);
+  // The Hierarchy tool window shows once a call or type hierarchy was asked for, as in IntelliJ.
+  const hasHierarchy = useHierarchy((s) => s.kind !== null);
   return [
     { id: "project", title: "Project", shortcut: "Alt+1", icon: lucide(Folder), badge: 0 },
     { id: "commit", title: "Commit", shortcut: "Alt+0", icon: lucide(GitCommitHorizontal), badge: changeCount },
@@ -41,6 +44,7 @@ function useToolEntries(): ToolEntry[] {
     { id: "debug", title: "Run and Debug", shortcut: "Ctrl+Shift+D", icon: lucide(Bug), badge: 0 },
     ...(hasTests ? [{ id: "testing" as const, title: "Testing", icon: lucide(FlaskConical), badge: failedTests }] : []),
     ...(hasChat ? [{ id: "chat" as const, title: "Chat", shortcut: "Ctrl+Alt+I", icon: lucide(MessagesSquare), badge: 0 }] : []),
+    ...(hasHierarchy ? [{ id: "hierarchy" as const, title: "Hierarchy", icon: lucide(ListTree), badge: 0 }] : []),
     { id: "remote", title: "Remote Hosts", icon: lucide(Server), badge: 0 },
     { id: "extensions", title: "Extensions", shortcut: "Alt+2", icon: lucide(Blocks), badge: 0 },
     ...containers.map((c) => ({

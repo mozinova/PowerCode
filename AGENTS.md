@@ -145,6 +145,6 @@ that type checks could not.
 ## Where things stand
 
 `todo.md` lists the `vscode` APIs still missing, among them notebooks,
-semantic tokens, `registerUriHandler`, file decorations, MCP servers, and the
+`registerUriHandler`, file decorations, MCP servers, and the
 `microsoft` / GitHub Enterprise sign-in. Check it before starting API work, and
 update it after.

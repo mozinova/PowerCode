@@ -3,8 +3,90 @@
 
 import { monaco } from "../editor/monaco";
 import { modelPath } from "../editor/models";
+import { featureProviders, onFeatureChange, provideFeature } from "../exthost/languages";
 import { moveBreakpointLines, toggleBreakpoint, useBreakpoints, type BreakpointEntry } from "./breakpoints";
-import { evaluate, useDebug, type StackFrame } from "./model";
+import { dap, evaluate, useDebug, type StackFrame } from "./model";
+
+interface RangeDto {
+  start: { line: number; character: number };
+  end: { line: number; character: number };
+}
+
+const toRange = (r: RangeDto) => new monaco.Range(r.start.line + 1, r.start.character + 1, r.end.line + 1, r.end.character + 1);
+
+type InlineValue =
+  | { kind: "text"; range: RangeDto; text: string }
+  | { kind: "variable"; range: RangeDto; variableName?: string; caseSensitive?: boolean }
+  | { kind: "expression"; range: RangeDto; expression?: string };
+
+/** Longest value shown for one variable, and for one line, as in VS Code. */
+const MAX_VALUE_LENGTH = 100;
+const MAX_LINE_LENGTH = 300;
+
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
+
+/** The variables of a frame's scopes (the cheap ones), by name, for inline values. */
+async function frameVariables(sessionId: string, frameId: number): Promise<{ name: string; value: string }[]> {
+  const { scopes } = await dap<{ scopes: { variablesReference: number; expensive?: boolean }[] }>(sessionId, "scopes", { frameId });
+  const lists = await Promise.all(
+    (scopes ?? [])
+      .filter((s) => !s.expensive && s.variablesReference > 0)
+      .map((s) =>
+        dap<{ variables: { name: string; value: string }[] }>(sessionId, "variables", { variablesReference: s.variablesReference })
+          .then((r) => r.variables ?? [])
+          .catch(() => []),
+      ),
+  );
+  return lists.flat();
+}
+
+/** The text an extension's inline values give, by line (1-based). */
+async function inlineValueTexts(
+  model: monaco.editor.ITextModel,
+  frame: StackFrame,
+  sessionId: string,
+  visible: monaco.IRange,
+): Promise<Map<number, string[]>> {
+  const providers = featureProviders("inlineValues", model.getLanguageId());
+  const stopped = { line: frame.line - 1, character: Math.max(0, frame.column - 1) };
+  // From the top of the view down to where execution stopped: lines below have not run yet.
+  const lastLine = Math.min(visible.endLineNumber, frame.line);
+  if (visible.startLineNumber > lastLine) return new Map();
+  const range = { start: { line: visible.startLineNumber - 1, character: 0 }, end: { line: lastLine - 1, character: model.getLineMaxColumn(lastLine) - 1 } };
+  const results = await Promise.all(
+    providers.map((p) =>
+      provideFeature<InlineValue[] | null>(p.handle, "inlineValues", model, { range, frameId: frame.id, stoppedLocation: { start: stopped, end: stopped } }).catch(
+        () => null,
+      ),
+    ),
+  );
+  const values = results.flatMap((r) => r ?? []);
+  let variables: Promise<{ name: string; value: string }[]> | null = null;
+  const byLine = new Map<number, string[]>();
+  for (const value of values) {
+    const at = toRange(value.range);
+    let text: string | null = null;
+    if (value.kind === "text") {
+      text = value.text;
+    } else if (value.kind === "variable") {
+      const name = value.variableName ?? model.getValueInRange(at);
+      variables ??= frameVariables(sessionId, frame.id).catch(() => []);
+      const list = await variables;
+      const found =
+        list.find((v) => v.name === name) ??
+        (value.caseSensitive === false ? list.find((v) => v.name.toLowerCase() === name.toLowerCase()) : undefined);
+      if (found) text = `${name} = ${clip(found.value, MAX_VALUE_LENGTH)}`;
+    } else {
+      const expression = value.expression ?? model.getValueInRange(at);
+      const result = await evaluate(expression, "watch").catch(() => null);
+      if (result) text = `${expression} = ${clip(result.result, MAX_VALUE_LENGTH)}`;
+    }
+    if (text === null) continue;
+    const line = at.startLineNumber;
+    byLine.set(line, [...(byLine.get(line) ?? []), text]);
+  }
+  return byLine;
+}
 
 const GUTTER_TARGETS = new Set([monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN, monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS]);
 
@@ -42,6 +124,10 @@ export function attachDebugger(editor: monaco.editor.ICodeEditor): monaco.IDispo
   let breakpointIds: string[] = [];
   const frameDecorations = editor.createDecorationsCollection();
   const hintDecorations = editor.createDecorationsCollection();
+  const inlineValueDecorations = editor.createDecorationsCollection();
+  /** What the inline values shown were computed for; a newer update replaces them. */
+  let inlineKey = "";
+  let inlineTicket = 0;
   /** Which breakpoint each breakpoint decoration stands for (to follow edits). */
   let decorated: { id: string; decoration: string }[] = [];
 
@@ -87,6 +173,40 @@ export function attachDebugger(editor: monaco.editor.ICodeEditor): monaco.IDispo
     );
   };
 
+  /** Extensions' inline values for the frame execution stopped at in this file (on stop, frame change, scroll). */
+  const updateInlineValues = async (force = false) => {
+    const file = path();
+    const model = editor.getModel();
+    const frame = file ? focusedFrameIn(file) : undefined;
+    const { focus, generation } = useDebug.getState();
+    const visible = editor.getVisibleRanges()[0];
+    if (!model || !frame || !focus || !visible || featureProviders("inlineValues", model.getLanguageId()).length === 0) {
+      inlineKey = "";
+      inlineTicket++;
+      inlineValueDecorations.clear();
+      return;
+    }
+    const key = `${focus.sessionId}:${frame.id}:${generation}:${model.uri}:${visible.startLineNumber}-${visible.endLineNumber}`;
+    if (key === inlineKey && !force) return;
+    inlineKey = key;
+    const ticket = ++inlineTicket;
+    const byLine = await inlineValueTexts(model, frame, focus.sessionId, visible).catch(() => new Map<number, string[]>());
+    if (ticket !== inlineTicket || model.isDisposed()) return;
+    inlineValueDecorations.set(
+      [...byLine].map(([line, texts]) => {
+        const column = model.getLineMaxColumn(line);
+        return {
+          range: new monaco.Range(line, column, line, column),
+          options: {
+            after: { content: clip(texts.join(", "), MAX_LINE_LENGTH), inlineClassName: "pc-inline-value" },
+            showIfCollapsed: true,
+          },
+        };
+      }),
+    );
+  };
+  let scrollTimer: number | undefined;
+
   // Breakpoints follow their lines as text is inserted or deleted above them.
   let moveTimer: number | undefined;
   const trackMoves = () => {
@@ -124,20 +244,65 @@ export function attachDebugger(editor: monaco.editor.ICodeEditor): monaco.IDispo
       hintDecorations.set([{ range: new monaco.Range(line, 1, line, 1), options: { glyphMarginClassName: "pc-bp pc-bp-hint" } }]);
     }),
     editor.onMouseLeave(() => hintDecorations.clear()),
+    editor.onDidChangeModel(() => void updateInlineValues()),
+    editor.onDidScrollChange((e) => {
+      if (!e.scrollTopChanged || !inlineKey) return;
+      window.clearTimeout(scrollTimer);
+      scrollTimer = window.setTimeout(() => void updateInlineValues(), 200);
+    }),
   ];
-  const unsubscribe = [useBreakpoints.subscribe(render), useDebug.subscribe(render)];
+  const unsubscribe = [
+    useBreakpoints.subscribe(render),
+    useDebug.subscribe(render),
+    useDebug.subscribe(() => void updateInlineValues()),
+    onFeatureChange((kind) => kind === "inlineValues" && void updateInlineValues(true)),
+  ];
   render();
+  void updateInlineValues();
 
   return {
     dispose() {
       window.clearTimeout(moveTimer);
+      window.clearTimeout(scrollTimer);
       listeners.forEach((l) => l.dispose());
       unsubscribe.forEach((u) => u());
       breakpointIds = editor.deltaDecorations(breakpointIds, []);
       frameDecorations.clear();
       hintDecorations.clear();
+      inlineTicket++;
+      inlineValueDecorations.clear();
     },
   };
+}
+
+/**
+ * What hovering `position` evaluates. A language's evaluatable expression provider
+ * decides (e.g. `this.items[i]`, not just `i`); without one, the word with the
+ * members before it (`a.b.c`) is evaluated. With providers that find nothing there,
+ * nothing is shown, as in VS Code.
+ */
+async function hoveredExpression(model: monaco.editor.ITextModel, position: monaco.Position): Promise<{ expression: string; range: monaco.Range } | null> {
+  const providers = featureProviders("evaluatableExpression", model.getLanguageId());
+  if (providers.length > 0) {
+    for (const p of providers) {
+      const result = await provideFeature<{ range: RangeDto; expression?: string } | null>(p.handle, "evaluatableExpression", model, {
+        position: { line: position.lineNumber - 1, character: position.column - 1 },
+      }).catch(() => null);
+      if (!result) continue;
+      const range = toRange(result.range);
+      const expression = result.expression ?? model.getValueInRange(range);
+      if (expression.trim()) return { expression, range };
+    }
+    return null;
+  }
+  const line = model.getLineContent(position.lineNumber);
+  const word = model.getWordAtPosition(position);
+  if (!word) return null;
+  let start = word.startColumn - 1;
+  while (start > 0 && /[\w$.]/.test(line[start - 1])) start--;
+  const expression = line.slice(start, word.endColumn - 1).replace(/^\.+/, "");
+  if (!expression) return null;
+  return { expression, range: new monaco.Range(position.lineNumber, start + 1, position.lineNumber, word.endColumn) };
 }
 
 let hoverRegistered = false;
@@ -150,19 +315,14 @@ export function registerDebugHover() {
     async provideHover(model, position) {
       const { focus } = useDebug.getState();
       if (!focus || focus.frameId === null || !modelPath(model)) return null;
-      // `a.b.c` up to the hovered word, so members can be inspected too.
-      const line = model.getLineContent(position.lineNumber);
-      const word = model.getWordAtPosition(position);
-      if (!word) return null;
-      let start = word.startColumn - 1;
-      while (start > 0 && /[\w$.]/.test(line[start - 1])) start--;
-      const expression = line.slice(start, word.endColumn - 1).replace(/^\.+/, "");
-      if (!expression) return null;
+      const target = await hoveredExpression(model, position);
+      if (!target) return null;
+      const { expression, range } = target;
       try {
         const result = await evaluate(expression, "hover");
         const fence = "```";
         return {
-          range: new monaco.Range(position.lineNumber, start + 1, position.lineNumber, word.endColumn),
+          range,
           contents: [{ value: `**${expression}**` }, { value: `${fence}\n${result.result}\n${fence}` }],
         };
       } catch {

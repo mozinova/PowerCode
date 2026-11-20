@@ -118,6 +118,9 @@ export interface ExtensionManifest {
     themes?: { id?: string; label: string; uiTheme: string; path: string }[];
     snippets?: { language: string; path: string }[];
     iconThemes?: { id: string; label?: string; path: string }[];
+    /** TextMate scopes for semantic token types (`"variable.readonly": ["variable.other.constant"]`). */
+    semanticTokenScopes?: { language?: string; scopes?: Record<string, string[]> }[];
+    semanticTokenTypes?: { id: string; superType?: string; description?: string }[];
   };
 }
 

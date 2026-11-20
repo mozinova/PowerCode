@@ -1082,17 +1082,41 @@ export function createApi(description: ExtensionDescription) {
       registerInlineCompletionItemProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("inlineCompletions", extensionId, s, p),
       // Not tied to documents: the UI asks every one of them (Go to Symbol in Workspace).
       registerWorkspaceSymbolProvider: (p: unknown) => providers.register("workspaceSymbols", extensionId, "*", p),
-      // Not bridged yet: accepted so extensions keep working. Semantic tokens would
-      // clash with the TextMate colouring, which uses Monaco's semantic tokens.
-      registerDocumentSemanticTokensProvider: () => new Disposable(() => {}),
-      registerDocumentRangeSemanticTokensProvider: () => new Disposable(() => {}),
-      registerCallHierarchyProvider: () => new Disposable(() => {}),
-      registerTypeHierarchyProvider: () => new Disposable(() => {}),
-      registerEvaluatableExpressionProvider: () => new Disposable(() => {}),
-      registerInlineValuesProvider: () => new Disposable(() => {}),
-      registerDocumentDropEditProvider: () => new Disposable(() => {}),
-      registerDocumentPasteEditProvider: () => new Disposable(() => {}),
+      // Merged with the TextMate colouring in the UI (semantic tokens drawn over it, as in VS Code).
+      registerDocumentSemanticTokensProvider: (s: providers.DocumentSelector, p: unknown, legend: types.SemanticTokensLegend) =>
+        providers.register("semanticTokens", extensionId, s, p, { legend: { tokenTypes: legend.tokenTypes, tokenModifiers: legend.tokenModifiers } }),
+      registerDocumentRangeSemanticTokensProvider: (s: providers.DocumentSelector, p: unknown, legend: types.SemanticTokensLegend) =>
+        providers.register("rangeSemanticTokens", extensionId, s, p, { legend: { tokenTypes: legend.tokenTypes, tokenModifiers: legend.tokenModifiers } }),
+      registerCallHierarchyProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("callHierarchy", extensionId, s, p),
+      registerTypeHierarchyProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("typeHierarchy", extensionId, s, p),
+      registerEvaluatableExpressionProvider: (s: providers.DocumentSelector, p: unknown) =>
+        providers.register("evaluatableExpression", extensionId, s, p),
+      registerInlineValuesProvider: (s: providers.DocumentSelector, p: unknown) => providers.register("inlineValues", extensionId, s, p),
+      registerDocumentDropEditProvider: (
+        s: providers.DocumentSelector,
+        p: unknown,
+        metadata?: { providedDropEditKinds?: { value: string }[]; dropMimeTypes?: string[] },
+      ) =>
+        providers.register("drop", extensionId, s, p, {
+          kinds: metadata?.providedDropEditKinds?.map((k) => k.value) ?? [],
+          // Without metadata VS Code offers it every drop.
+          mimeTypes: metadata?.dropMimeTypes ?? ["*/*"],
+        }),
+      registerDocumentPasteEditProvider: (
+        s: providers.DocumentSelector,
+        p: { prepareDocumentPaste?: unknown },
+        metadata: { providedPasteEditKinds?: { value: string }[]; copyMimeTypes?: string[]; pasteMimeTypes?: string[] },
+      ) =>
+        providers.register("paste", extensionId, s, p, {
+          kinds: metadata?.providedPasteEditKinds?.map((k) => k.value) ?? [],
+          copyMimeTypes: metadata?.copyMimeTypes ?? [],
+          mimeTypes: metadata?.pasteMimeTypes ?? [],
+          prepare: typeof p?.prepareDocumentPaste === "function",
+        }),
       createLanguageStatusItem: (id: string) => ({ id, text: "", severity: 0, dispose() {} }),
+      // Proposed API the built-in TypeScript extension calls unconditionally (highlights
+      // across open files); accepted so it registers the rest of its features.
+      registerMultiDocumentHighlightProvider: () => new Disposable(() => {}),
     },
 
     env: {
@@ -1183,6 +1207,9 @@ export function createApi(description: ExtensionDescription) {
     },
     chat: {
       createChatParticipant: (id: string, handler: unknown) => chat.createChatParticipant(extensionId, id, handler),
+      // Proposed API (the built-in TypeScript extension registers one): nothing asks for mapped edits here.
+      registerMappedEditsProvider: () => new Disposable(() => {}),
+      registerMappedEditsProvider2: () => new Disposable(() => {}),
     },
     lm: {
       registerLanguageModelChatProvider: (vendor: string, provider: unknown) => lm.registerLanguageModelChatProvider(extensionId, vendor, provider),
