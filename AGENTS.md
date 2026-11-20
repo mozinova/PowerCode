@@ -29,8 +29,8 @@ A lightweight desktop IDE: **Tauri 2 + Rust** backend, **React 19 + TypeScript +
 Tailwind v4** UI, **Monaco** editor, IntelliJ "New UI" dark look. It runs **VS Code
 extensions from Open VSX**, including their JavaScript, through its own extension
 host (a bundled Node.js sidecar implementing the `vscode` API). Windows, Linux and
-macOS (Apple Silicon and Intel, not signed yet) are released; macOS is the least
-tested. Package manager: **bun**.
+macOS (Apple Silicon and Intel; ad-hoc signed, not notarized) are released; macOS
+is the least tested. Package manager: **bun**.
 
 ## Layout
 

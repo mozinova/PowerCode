@@ -16,6 +16,10 @@
   <a href="todo.md">API status</a>
 </p>
 
+<p align="center">
+  <img src="raw/screenshot.png" alt="PowerCode with the Project view, a Rust file open in the editor, and Claude Code in the side panel" width="900" />
+</p>
+
 ---
 
 PowerCode is a code editor that aims to be small and fast like a native app while
@@ -60,9 +64,11 @@ Installers are on the [Releases](https://github.com/mozinova/PowerCode/releases)
 
 - **Windows:** `.exe` (installer) or `.msi`
 - **Linux:** `.deb`, `.rpm` or `.AppImage`
-- **macOS:** `.dmg` for Apple Silicon or Intel. The app is not signed yet: the
-  first time, right-click it and choose Open, or run
-  `xattr -dr com.apple.quarantine /Applications/PowerCode.app`.
+- **macOS:** `.dmg` for Apple Silicon or Intel. The app is not notarized by Apple
+  yet: the first time macOS says it cannot verify it, open **System Settings →
+  Privacy & Security** and choose **Open Anyway**. If macOS says the app "is
+  damaged" (builds before 0.1.91), run
+  `xattr -cr /Applications/PowerCode.app` once.
 
 ## Building from source
 

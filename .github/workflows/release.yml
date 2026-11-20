@@ -116,8 +116,9 @@ jobs:
             - **Windows**: `.exe` (installer) or `.msi`
             - **Linux**: `.deb`, `.rpm` or `.AppImage`
             - **macOS**: `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`). The app is not
-              signed yet: the first time, right-click it and choose Open, or run
-              `xattr -dr com.apple.quarantine /Applications/PowerCode.app`.
+              notarized by Apple yet: the first time macOS says it cannot verify it, open
+              System Settings → Privacy & Security and choose Open Anyway (or run
+              `xattr -cr /Applications/PowerCode.app`).
           releaseDraft: true
           # A tag with a suffix (v1.2.0-beta) is a pre-release.
           prerelease: ${{ contains(github.ref_name, '-') }}
