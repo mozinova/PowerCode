@@ -153,14 +153,26 @@ pub fn github_cli_token() -> CmdResult<String> {
     Ok(token)
 }
 
+/// `git credential fill` that never asks the user anything: no terminal prompt, no
+/// Git Credential Manager window, and no askpass program. `GIT_TERMINAL_PROMPT=0`
+/// alone still lets Git run `GIT_ASKPASS`, `core.askPass` or `SSH_ASKPASS` (a
+/// dialog, or a process waiting for input) when nothing is stored. An empty
+/// `GIT_ASKPASS` makes Git skip the other two as well.
+fn credential_command() -> std::process::Command {
+    let mut cmd = command("git");
+    cmd.args(["-c", "core.askPass=", "credential", "fill"])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GCM_INTERACTIVE", "never")
+        .env("GIT_ASKPASS", "")
+        .env_remove("SSH_ASKPASS");
+    cmd
+}
+
 /// The github.com password Git's credential helper holds (Git Credential Manager keeps
 /// an OAuth token there). Never prompts: without a stored credential it fails.
 #[tauri::command(async)]
 pub fn github_git_credential() -> CmdResult<String> {
-    let mut child = command("git")
-        .args(["credential", "fill"])
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
+    let mut child = credential_command()
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -188,6 +200,77 @@ fn password_of(credential: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_credential_lookup_never_prompts() {
+        let cmd = credential_command();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, ["-c", "core.askPass=", "credential", "fill"]);
+        let env: std::collections::HashMap<_, _> = cmd
+            .get_envs()
+            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.map(|v| v.to_string_lossy().into_owned())))
+            .collect();
+        assert_eq!(env["GIT_TERMINAL_PROMPT"].as_deref(), Some("0"));
+        assert_eq!(env["GCM_INTERACTIVE"].as_deref(), Some("never"));
+        assert_eq!(env["GIT_ASKPASS"].as_deref(), Some(""));
+        // Removed, not inherited from the user's environment.
+        assert_eq!(env["SSH_ASKPASS"], None);
+    }
+
+    /// With an askpass program configured every way and nothing stored, Git fails
+    /// without running it. The same lookup without the protections runs it, so the
+    /// test notices if it stops reaching the askpass step.
+    #[test]
+    fn an_askpass_program_is_never_run() {
+        let dir = std::env::temp_dir().join(format!("powercode-askpass-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let marker = dir.join("asked");
+        let script = dir.join(if cfg!(windows) { "askpass.bat" } else { "askpass.sh" });
+        let body = if cfg!(windows) {
+            format!("@echo off\r\necho asked> \"{}\"\r\necho secret\r\n", marker.display())
+        } else {
+            format!("#!/bin/sh\necho asked > '{}'\necho secret\n", marker.display())
+        };
+        std::fs::write(&script, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let askpass = script.to_string_lossy().into_owned();
+        // As a user's setup could be: no credential helper, an askpass program everywhere.
+        let run = |mut cmd: std::process::Command| -> Option<String> {
+            cmd.env("GIT_CONFIG_COUNT", "2")
+                .env("GIT_CONFIG_KEY_0", "credential.helper")
+                .env("GIT_CONFIG_VALUE_0", "")
+                .env("GIT_CONFIG_KEY_1", "core.askPass")
+                .env("GIT_CONFIG_VALUE_1", &askpass)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            let mut child = cmd.spawn().ok()?;
+            child.stdin.take()?.write_all(b"protocol=https\nhost=example.invalid\n\n").ok()?;
+            Some(String::from_utf8_lossy(&child.wait_with_output().ok()?.stdout).into_owned())
+        };
+
+        let mut unprotected = command("git");
+        unprotected.args(["credential", "fill"]).env("GIT_TERMINAL_PROMPT", "0").env("SSH_ASKPASS", &askpass);
+        // No Git on this machine: nothing to check.
+        if run(unprotected).is_none() {
+            return;
+        }
+        assert!(marker.exists(), "control: without the protections Git runs the askpass program");
+        std::fs::remove_file(&marker).unwrap();
+
+        let mut protected = credential_command();
+        // An SSH_ASKPASS in the environment is removed by credential_command (set here on top of it).
+        protected.env("SSH_ASKPASS", &askpass).env_remove("SSH_ASKPASS");
+        let output = run(protected).unwrap();
+        assert!(!marker.exists(), "the askpass program ran");
+        assert_eq!(password_of(&output), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn reads_the_password_of_a_credential() {

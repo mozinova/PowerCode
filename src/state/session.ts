@@ -69,6 +69,8 @@ export function restoreTabs(root: string) {
 }
 
 let saveTimer: number | undefined;
+/** The tabs waiting for their timer, written at once by `flushSession`. */
+let pendingTabs: { root: string; groups: EditorGroup[]; activeGroup: number } | null = null;
 
 function saveTabs(root: string, groups: EditorGroup[], activeGroup: number) {
   write(root, (session) => {
@@ -87,8 +89,35 @@ export function startSessionSaving() {
     if (s.groups === previous.groups && s.activeGroup === previous.activeGroup) return;
     window.clearTimeout(saveTimer);
     const { root, groups, activeGroup } = s;
-    saveTimer = window.setTimeout(() => saveTabs(root, groups, activeGroup), SAVE_DELAY_MS);
+    pendingTabs = { root, groups, activeGroup };
+    saveTimer = window.setTimeout(() => {
+      pendingTabs = null;
+      saveTabs(root, groups, activeGroup);
+    }, SAVE_DELAY_MS);
   });
+  // The window going away (closed, reloaded) or losing focus (it may be closed from the
+  // taskbar next): what is pending is written now, not lost with the timer.
+  window.addEventListener("pagehide", flushSession);
+  window.addEventListener("beforeunload", flushSession);
+  window.addEventListener("blur", flushSession);
+}
+
+/**
+ * Writes the tabs and Project view changes still waiting for their delay. Call
+ * before the window closes and before another folder opens.
+ */
+export function flushSession() {
+  window.clearTimeout(saveTimer);
+  if (pendingTabs) {
+    const { root, groups, activeGroup } = pendingTabs;
+    pendingTabs = null;
+    saveTabs(root, groups, activeGroup);
+  }
+  for (const [root, pending] of [...pendingExplorer]) {
+    window.clearTimeout(pending.timer);
+    pendingExplorer.delete(root);
+    writeExplorer(root, pending.changes);
+  }
 }
 
 // ---- Project view -----------------------------------------------------------------
@@ -107,9 +136,13 @@ export function saveExplorer(root: string, changes: { expanded?: string[]; scrol
   const merged = { ...pending?.changes, ...changes };
   const timer = window.setTimeout(() => {
     pendingExplorer.delete(root);
-    write(root, (session) => {
-      session.explorer = { ...session.explorer, ...merged };
-    });
+    writeExplorer(root, merged);
   }, SAVE_DELAY_MS);
   pendingExplorer.set(root, { changes: merged, timer });
+}
+
+function writeExplorer(root: string, changes: { expanded?: string[]; scrollTop?: number }) {
+  write(root, (session) => {
+    session.explorer = { ...session.explorer, ...changes };
+  });
 }

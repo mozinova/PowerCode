@@ -24,7 +24,7 @@ import { refreshGit } from "./git/store";
 import { saveIfDirty } from "./editor/autosave";
 import { pickRemoteFolder } from "./state/folderPicker";
 import { enterFolder } from "./state/trust";
-import { restoreTabs } from "./state/session";
+import { flushSession, restoreTabs } from "./state/session";
 import { addRecentProject, removeRecentProject } from "./state/recentProjects";
 import { useSettings } from "./state/settings";
 import { notify } from "./state/notifications";
@@ -93,6 +93,8 @@ export async function openFolder(path?: string) {
   if (!(await confirmDiscard(dirty.map((t) => t.name)))) return;
 
   const previous = useWorkspace.getState().root;
+  // The folder being left keeps its last tab changes.
+  flushSession();
   disposeAllModels();
   closeAllTerminals();
   // Trust first: nothing may run in the folder before the user decides (see state/trust.ts).
@@ -142,6 +144,7 @@ export async function closeFolder(): Promise<boolean> {
   const { root, tabs } = useWorkspace.getState();
   if (!root) return true;
   if (!(await confirmDiscard(tabs.filter((t) => t.dirty).map((t) => t.name)))) return false;
+  flushSession();
   disposeAllModels();
   closeAllTerminals();
   enterFolder(null);

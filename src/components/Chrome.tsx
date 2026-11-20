@@ -1,6 +1,7 @@
 //! Window chrome in the IntelliJ New UI style: main toolbar and status bar
 //! (the tool window stripes are in ToolStripes.tsx).
 
+import { flushSession } from "../state/session";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   AppWindow,
@@ -131,7 +132,16 @@ function WindowControls() {
         title={maximized ? "Restore" : "Maximize"}
         onClick={() => void appWindow.toggleMaximize()}
       />
-      <WindowButton icon={X} title="Close" onClick={() => void appWindow.close()} danger />
+      <WindowButton
+        icon={X}
+        title="Close"
+        onClick={() => {
+          // Before the window goes: the last tab changes are still on their save delay.
+          flushSession();
+          void appWindow.close();
+        }}
+        danger
+      />
     </div>
   );
 }
