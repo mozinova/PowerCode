@@ -6,13 +6,22 @@ export interface DirEntry {
   isDir: boolean;
 }
 
+/** The error of a save refused because the file changed on disk (see `writeTextFile`). */
+export const FILE_CHANGED = "PC_FILE_CHANGED";
+
 export const fsApi = {
   listDir: (path: string) => invoke<DirEntry[]>("list_dir", { path }),
   /** Paths relative to `root`, honouring `.gitignore`. */
   listProjectFiles: (root: string) => invoke<string[]>("list_project_files", { root }),
   readTextFile: (path: string) => invoke<string>("read_text_file", { path }),
-  writeTextFile: (path: string, contents: string) =>
-    invoke<void>("write_text_file", { path, contents }),
+  /**
+   * Writes a file; returns its new change signature. With `expected` (its signature
+   * when read), a file changed since is not overwritten: the call fails with `FILE_CHANGED`.
+   */
+  writeTextFile: (path: string, contents: string, expected?: string | null) =>
+    invoke<string | null>("write_text_file", { path, contents, expected: expected ?? null }),
+  /** Change signatures (modification time and size) of `paths`; null where a path does not exist. */
+  signatures: (paths: string[]) => invoke<(string | null)[]>("fs_signatures", { paths }),
   createFile: (path: string) => invoke<void>("create_file", { path }),
   createDir: (path: string) => invoke<void>("create_dir", { path }),
   renamePath: (from: string, to: string) => invoke<void>("rename_path", { from, to }),

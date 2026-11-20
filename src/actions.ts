@@ -1,5 +1,6 @@
 import { ask, message, open } from "@tauri-apps/plugin-dialog";
 import { disposeAllModels, disposeModel, moveModel, saveModel } from "./editor/models";
+import { forgetDismissal, isFileChanged, resolveSaveConflict } from "./editor/saveConflicts";
 import { errorMessage, fsApi, remoteApi } from "./lib/ipc";
 import { basename, isWithin, movedPath } from "./lib/paths";
 import { remoteLabel, remoteOf } from "./lib/remote";
@@ -174,6 +175,11 @@ export async function saveActive() {
     else await saveModel(path);
     void refreshGit();
   } catch (e) {
+    // Changed on disk since it was opened: the user decides (Compare, Overwrite, Revert).
+    if (isFileChanged(e)) {
+      forgetDismissal(e.path);
+      return void resolveSaveConflict(e.path);
+    }
     await message(`Could not save the file:\n${errorMessage(e)}`, {
       title: "PowerCode",
       kind: "error",

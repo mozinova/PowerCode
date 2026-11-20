@@ -11,6 +11,8 @@ import { configureTasks, runTask, terminateTask } from "./exthost/tasks";
 import { manageAccounts } from "./exthost/accounts";
 import { DEBUG, RUN, runAllTests } from "./exthost/testing";
 import { saveModel } from "./editor/models";
+import { isFileChanged, resolveSaveConflict } from "./editor/saveConflicts";
+import { errorMessage } from "./lib/ipc";
 import { fetchAll, initRepository, pull, pushBranch } from "./git/actions";
 import { useGit } from "./git/store";
 import { remoteOf } from "./lib/remote";
@@ -66,8 +68,15 @@ async function reloadWindow() {
 
 async function saveAll() {
   const dirty = useWorkspace.getState().tabs.filter((t) => t.dirty);
-  await Promise.all(dirty.map((t) => saveModel(parseDiffTab(t.path) ?? t.path)));
-  if (dirty.length > 0) notify("success", `Saved ${dirty.length} ${dirty.length === 1 ? "file" : "files"}`);
+  const results = await Promise.allSettled(dirty.map((t) => saveModel(parseDiffTab(t.path) ?? t.path)));
+  const saved = results.filter((r) => r.status === "fulfilled").length;
+  for (const r of results) {
+    if (r.status === "fulfilled") continue;
+    // Changed on disk since opened: the user decides for each file.
+    if (isFileChanged(r.reason)) void resolveSaveConflict(r.reason.path);
+    else notify("error", "Could not save a file", errorMessage(r.reason));
+  }
+  if (saved > 0) notify("success", `Saved ${saved} ${saved === 1 ? "file" : "files"}`);
 }
 
 function showTool(tool: ToolId) {

@@ -1,10 +1,36 @@
 import { monaco } from "./monaco";
 import { fileUri } from "./uris";
-import { fsApi } from "../lib/ipc";
+import { FILE_CHANGED, errorMessage, fsApi } from "../lib/ipc";
 import { useWorkspace } from "../state/workspace";
 
 /** Alternative version id of each model at its last load or save. */
 const savedVersions = new Map<string, number>();
+/**
+ * Each open file's change signature on disk when it was last read or written: a
+ * save checks the file is still like that, so it never overwrites a change made
+ * outside the editor (see saveConflicts.ts). Null when unknown (no check).
+ */
+const diskSignatures = new Map<string, string | null>();
+
+export function diskSignature(path: string): string | null | undefined {
+  return diskSignatures.get(path);
+}
+
+/** A save refused because the file changed on disk since it was read. */
+export class FileChangedError extends Error {
+  constructor(readonly path: string) {
+    super(`${path} changed on disk.`);
+  }
+}
+
+/**
+ * The file's text with its signature. The signature is taken first: a change that
+ * lands between the two then shows up as a change later, never goes unnoticed.
+ */
+async function readFile(path: string): Promise<{ text: string; signature: string | null }> {
+  const signature = (await fsApi.signatures([path]).catch(() => [null]))[0] ?? null;
+  return { text: await fsApi.readTextFile(path), signature };
+}
 const pending = new Map<string, Promise<monaco.editor.ITextModel>>();
 /** File path of each model, by URI: `Uri.fsPath` does not keep the original drive letter case. */
 const paths = new Map<string, string>();
@@ -42,9 +68,11 @@ export function loadModel(path: string): Promise<monaco.editor.ITextModel> {
 
   let promise = pending.get(path);
   if (!promise) {
-    promise = fsApi
-      .readTextFile(path)
-      .then((text) => createModel(path, text, false))
+    promise = readFile(path)
+      .then(({ text, signature }) => {
+        diskSignatures.set(path, signature);
+        return createModel(path, text, false);
+      })
       .finally(() => pending.delete(path));
     pending.set(path, promise);
   }
@@ -79,33 +107,69 @@ export async function runWillSave(model: monaco.editor.ITextModel, reason: SaveR
   }
 }
 
-export async function saveModel(path: string, reason: SaveReason = SaveReason.Manual) {
+/**
+ * Saves an open file. It fails with `FileChangedError` when the file changed on
+ * disk since it was read, unless `overwrite` (the user chose to replace that change).
+ */
+export async function saveModel(path: string, reason: SaveReason = SaveReason.Manual, overwrite = false) {
   const model = getModel(path);
   if (!model) return;
   await runWillSave(model, reason);
   const version = model.getAlternativeVersionId();
-  await fsApi.writeTextFile(path, model.getValue());
+  const text = model.getValue();
+  let signature: string | null;
+  try {
+    signature = await fsApi.writeTextFile(path, text, overwrite ? null : diskSignatures.get(path));
+  } catch (e) {
+    if (errorMessage(e) !== FILE_CHANGED) throw e;
+    // Changed on disk, but to what this save would write (e.g. the same edit made
+    // elsewhere): nothing to lose.
+    const disk = await readFile(path).catch(() => null);
+    if (disk?.text !== text) throw new FileChangedError(path);
+    signature = disk.signature;
+  }
+  diskSignatures.set(path, signature);
   savedVersions.set(path, version);
   useWorkspace.getState().setDirty(path, isDirty(path, model));
   saveListeners.forEach((listener) => listener(path, model));
+}
+
+/** Replaces an open file's text with what is on disk, dropping its unsaved edits (one undoable edit). */
+export async function revertModel(path: string) {
+  const model = getModel(path);
+  if (!model) return;
+  const { text, signature } = await readFile(path);
+  if (text !== model.getValue()) {
+    model.pushStackElement();
+    model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);
+    model.pushStackElement();
+  }
+  diskSignatures.set(path, signature);
+  savedVersions.set(path, model.getAlternativeVersionId());
+  useWorkspace.getState().setDirty(path, false);
 }
 
 /** Moves an open model to the file's new path, keeping unsaved edits. */
 export function moveModel(from: string, to: string) {
   const model = getModel(from);
   if (!model) return;
+  const signature = diskSignatures.get(from);
   createModel(to, model.getValue(), isDirty(from, model));
   disposeModel(from);
+  // A rename keeps the file's time and size: its signature is the same.
+  diskSignatures.set(to, signature ?? null);
 }
 
 export function disposeModel(path: string) {
   getModel(path)?.dispose();
   savedVersions.delete(path);
+  diskSignatures.delete(path);
 }
 
 export function disposeAllModels() {
   for (const model of monaco.editor.getModels()) model.dispose();
   savedVersions.clear();
+  diskSignatures.clear();
 }
 
 /**
@@ -117,9 +181,11 @@ export async function reloadCleanModels() {
     [...paths.values()].map(async (path) => {
       const model = getModel(path);
       if (!model || isDirty(path, model)) return;
-      const text = await fsApi.readTextFile(path).catch(() => null);
-      if (text === null || text === model.getValue() || isDirty(path, model)) return;
-      model.setValue(text);
+      const disk = await readFile(path).catch(() => null);
+      if (disk === null || isDirty(path, model)) return;
+      diskSignatures.set(path, disk.signature);
+      if (disk.text === model.getValue()) return;
+      model.setValue(disk.text);
       savedVersions.set(path, model.getAlternativeVersionId());
     }),
   );
@@ -129,8 +195,12 @@ export async function reloadCleanModels() {
 export async function reloadModelIfClean(path: string) {
   const model = getModel(path);
   if (!model || isDirty(path, model)) return;
-  const text = await fsApi.readTextFile(path).catch(() => null);
-  if (text === null || text === model.getValue() || isDirty(path, model)) return;
+  const disk = await readFile(path).catch(() => null);
+  if (disk === null || isDirty(path, model)) return;
+  // Touched with the same content (a formatter, `git checkout`): the new signature is the one to check against.
+  diskSignatures.set(path, disk.signature);
+  const text = disk.text;
+  if (text === model.getValue()) return;
   // As one undoable edit, so the cursor and scroll position stay where they were.
   model.pushStackElement();
   model.pushEditOperations([], [{ range: model.getFullModelRange(), text }], () => null);

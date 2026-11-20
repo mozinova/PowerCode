@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { documentFor, documents, onDidChange, onDidClose, onDidOpen, onDidSave, saveDocument, TextDocumentImpl } from "./documents";
 import * as dto from "./dto";
 import { matchesGlob } from "./glob";
+import { watchTree } from "./watcher";
 import * as providers from "./providers";
 import * as rpc from "./rpc";
 import { host, lookup, onDidChangeColorTheme, onDidChangeConfiguration, type ExtensionDescription } from "./state";
@@ -603,24 +604,20 @@ function createFileSystemWatcher(pattern: string | RelativePattern, ignoreCreate
   const created = new EventEmitter<Uri>();
   const changed = new EventEmitter<Uri>();
   const deleted = new EventEmitter<Uri>();
-  let watcher: fs.FSWatcher | undefined;
+  let stop: (() => void) | undefined;
   if (base) {
-    try {
-      watcher = fs.watch(base, { recursive: true }, (_event, filename) => {
-        if (!filename) return;
-        const relative = filename.toString().replace(/\\/g, "/");
-        if (relative.split("/").some((part) => SKIPPED_DIRECTORIES.has(part)) || !matchesGlob(relative, glob)) return;
-        const full = path.join(base, relative);
-        const uri = Uri.file(full);
-        fs.stat(full, (error) => {
-          if (error) !ignoreDelete && deleted.fire(uri);
-          else if (_event === "rename") !ignoreCreate && created.fire(uri);
-          else !ignoreChange && changed.fire(uri);
-        });
+    // Shared and bounded (see watcher.ts): `*.json` watches one folder, `**/x` the tree.
+    const recursive = glob.includes("/") || glob.includes("**");
+    stop = watchTree(base, recursive, (event, full) => {
+      const relative = path.relative(base, full).replace(/\\/g, "/");
+      if (relative.startsWith("..") || relative.split("/").some((part) => SKIPPED_DIRECTORIES.has(part)) || !matchesGlob(relative, glob)) return;
+      const uri = Uri.file(full);
+      fs.stat(full, (error) => {
+        if (error) !ignoreDelete && deleted.fire(uri);
+        else if (event === "rename") !ignoreCreate && created.fire(uri);
+        else !ignoreChange && changed.fire(uri);
       });
-    } catch {
-      // Watching is best effort (e.g. on file systems without recursive watching).
-    }
+    });
   }
   return {
     ignoreCreateEvents: ignoreCreate,
@@ -629,7 +626,7 @@ function createFileSystemWatcher(pattern: string | RelativePattern, ignoreCreate
     onDidCreate: created.event,
     onDidChange: changed.event,
     onDidDelete: deleted.event,
-    dispose: () => watcher?.close(),
+    dispose: () => stop?.(),
   };
 }
 
@@ -937,6 +934,8 @@ export function createApi(description: ExtensionDescription) {
       createTerminal: terminals.createTerminal,
       createTextEditorDecorationType: (options: unknown) => decorations.createDecorationType(options),
       registerUriHandler: () => new Disposable(() => {}),
+      // Proposed API (the GitHub extension's "Copy vscode.dev Link"): PowerCode has no Share menu.
+      registerShareProvider: () => new Disposable(() => {}),
       registerTreeDataProvider(viewId: string, treeDataProvider: unknown) {
         const view = views.registerTree(viewId, { treeDataProvider });
         return new Disposable(() => view.dispose());
@@ -987,6 +986,8 @@ export function createApi(description: ExtensionDescription) {
       openTextDocument,
       findFiles,
       createFileSystemWatcher,
+      // Proposed API (the GitHub extension maps vscode.dev URIs with it): nothing to map here.
+      registerCanonicalUriProvider: () => new Disposable(() => {}),
       fs: workspaceFs,
       async applyEdit(edit: WorkspaceEdit) {
         return rpc.request<boolean>("workspace/applyEdit", dto.workspaceEdit(edit));

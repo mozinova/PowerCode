@@ -7,6 +7,7 @@ import { notify } from "../state/notifications";
 import { setting } from "../settings/store";
 import { useSettings } from "../state/settings";
 import { isModelDirty, modelPath, SaveReason, saveModel } from "./models";
+import { heldBack, isFileChanged, resolveSaveConflict, shouldAsk } from "./saveConflicts";
 import { monaco } from "./monaco";
 
 /** `files.autoSaveDelay`, as in VS Code. */
@@ -21,12 +22,19 @@ export async function saveIfDirty(path: string): Promise<boolean> {
   window.clearTimeout(timers.get(path));
   timers.delete(path);
   if (!isModelDirty(path)) return true;
+  // A file changed on disk whose question is open or was dismissed waits for the user.
+  if (await heldBack(path)) return false;
   try {
     await saveModel(path, SaveReason.AfterDelay);
     failing.delete(path);
     void refreshGit();
     return true;
   } catch (e) {
+    // Changed on disk since it was opened: not written; the user decides (once per change).
+    if (isFileChanged(e)) {
+      if (await shouldAsk(path)) void resolveSaveConflict(path);
+      return false;
+    }
     if (!failing.has(path)) notify("error", "Auto save failed", `${path}\n${errorMessage(e)}`);
     failing.add(path);
     return false;

@@ -129,12 +129,41 @@ pub async fn read_text_file(remotes: State<'_, Remotes>, path: String) -> CmdRes
     decode_text(std::fs::read(&path).map_err(err)?)
 }
 
+/// The error of a save refused because the file changed on disk since it was read.
+pub const FILE_CHANGED: &str = "PC_FILE_CHANGED";
+
+/// Writes a text file and returns its new change signature (see `fs_signatures`).
+/// With `expected` (the signature when the editor read or last wrote it), the write
+/// is refused with `FILE_CHANGED` if the file changed since (an AI agent, `git`,
+/// another editor), instead of overwriting that change.
 #[tauri::command]
-pub async fn write_text_file(remotes: State<'_, Remotes>, path: String, contents: String) -> CmdResult<()> {
-    if let Some((host, file)) = remote::parse(&path) {
-        return remote::write_file(&remotes, host, &file, contents.as_bytes()).await;
+pub async fn write_text_file(
+    remotes: State<'_, Remotes>,
+    path: String,
+    contents: String,
+    expected: Option<String>,
+) -> CmdResult<Option<String>> {
+    write_checked(&remotes, path, contents, expected).await
+}
+
+async fn write_checked(remotes: &Remotes, path: String, contents: String, expected: Option<String>) -> CmdResult<Option<String>> {
+    if let Some(expected) = expected {
+        let current = signatures(remotes, vec![path.clone()]).await?.pop().flatten();
+        // A file deleted meanwhile is written again, as VS Code does.
+        if current.is_some_and(|current| current != expected) {
+            return Err(FILE_CHANGED.to_string());
+        }
     }
-    std::fs::write(Path::new(&path), contents).map_err(err)
+    if let Some((host, file)) = remote::parse(&path) {
+        remote::write_file(remotes, host, &file, contents.as_bytes()).await?;
+    } else {
+        let target = path.clone();
+        tauri::async_runtime::spawn_blocking(move || std::fs::write(Path::new(&target), contents))
+            .await
+            .map_err(err)?
+            .map_err(err)?;
+    }
+    Ok(signatures(remotes, vec![path]).await?.pop().flatten())
 }
 
 fn ensure_absent(path: &Path) -> CmdResult<()> {
@@ -231,6 +260,10 @@ async fn remote_signatures(remotes: &Remotes, host: &str, paths: &[String]) -> C
 /// are checked with one command per host or distribution.
 #[tauri::command]
 pub async fn fs_signatures(remotes: State<'_, Remotes>, paths: Vec<String>) -> CmdResult<Vec<Option<String>>> {
+    signatures(&remotes, paths).await
+}
+
+async fn signatures(remotes: &Remotes, paths: Vec<String>) -> CmdResult<Vec<Option<String>>> {
     // Remote paths grouped by session (SSH host or WSL distribution), with their index.
     let mut groups: std::collections::HashMap<String, Vec<(usize, String)>> = std::collections::HashMap::new();
     let mut result: Vec<Option<String>> = vec![None; paths.len()];
@@ -243,7 +276,7 @@ pub async fn fs_signatures(remotes: State<'_, Remotes>, paths: Vec<String>) -> C
     }
     for (session, entries) in &groups {
         let list: Vec<String> = entries.iter().map(|(_, p)| p.clone()).collect();
-        let found = remote_signatures(&remotes, session, &list).await?;
+        let found = remote_signatures(remotes, session, &list).await?;
         for (index, path) in entries {
             result[*index] = found.get(path).cloned();
         }
@@ -266,6 +299,36 @@ pub async fn fs_signatures(remotes: State<'_, Remotes>, paths: Vec<String>) -> C
 #[cfg(test)]
 mod signature_tests {
     use super::*;
+
+    #[test]
+    fn a_write_is_refused_when_the_file_changed_since_it_was_read() {
+        let dir = std::env::temp_dir().join(format!("powercode-write-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.txt").to_string_lossy().into_owned();
+        std::fs::write(&file, "one").unwrap();
+        let remotes = Remotes::default();
+        let block = |future| tauri::async_runtime::block_on(future);
+        let read = local_signature(&file);
+        // Unchanged since read: written, with the new signature returned.
+        let saved = block(write_checked(&remotes, file.clone(), "two".into(), read.clone())).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "two");
+        assert_eq!(saved, local_signature(&file));
+        // Changed by something else (size and time differ): refused, the change kept.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&file, "theirs!").unwrap();
+        let refused = block(write_checked(&remotes, file.clone(), "mine".into(), saved.clone()));
+        assert_eq!(refused, Err(FILE_CHANGED.to_string()));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "theirs!");
+        // Without an expected signature (Overwrite): written.
+        block(write_checked(&remotes, file.clone(), "mine".into(), None)).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine");
+        // Deleted meanwhile: written again.
+        std::fs::remove_file(&file).unwrap();
+        block(write_checked(&remotes, file.clone(), "back".into(), saved)).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "back");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn signatures_change_with_the_content_and_the_folder() {
