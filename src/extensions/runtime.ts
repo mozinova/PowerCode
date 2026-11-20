@@ -53,6 +53,8 @@ interface ExtensionsState {
   updates: Record<string, string>;
   /** Installed extensions whose package is for another platform (they need reinstalling). */
   wrongPlatform: Record<string, boolean>;
+  /** Several extensions are being installed: the extension host restarts once, when they are done. */
+  batchInstalling: boolean;
 }
 
 export const useExtensions = create<ExtensionsState>(() => ({
@@ -63,6 +65,7 @@ export const useExtensions = create<ExtensionsState>(() => ({
   installing: {},
   updates: {},
   wrongPlatform: {},
+  batchInstalling: false,
 }));
 
 /** Disposables of each activated extension, for uninstalling without a restart. */
@@ -325,6 +328,8 @@ async function loadExtensions() {
   await setEditorTheme(storedThemeId()).catch(() => setEditorTheme(BUILTIN_THEME.id));
   await setIconTheme(storedIconThemeId()).catch(() => setIconTheme(BUILTIN_ICON_THEME_ID));
   offerMissingDependencies();
+  // Imported here, not at the top: builtinExtensions.ts imports this module.
+  void import("./builtinExtensions").then((m) => m.installBuiltinExtensions());
 }
 
 /** Extensions installed without what they depend on (e.g. before PowerCode installed dependencies): offer them. */
@@ -380,8 +385,8 @@ function dependenciesOf(ext: InstalledExtension): string[] {
   return [...new Set([...list(manifest.extensionDependencies), ...list(manifest.extensionPack)].map((id) => id.toLowerCase()))];
 }
 
-/** Extensions PowerCode provides itself (the Git API, in the extension host): never missing. */
-const BUILTIN_EXTENSION_IDS = ["vscode.git", "vscode.git-base"];
+/** Extensions PowerCode provides itself (the Git API and the GitHub sign-in, in the extension host): never missing. */
+const BUILTIN_EXTENSION_IDS = ["vscode.git", "vscode.git-base", "vscode.github-authentication"];
 
 const isInstalled = (id: string) => {
   const { installed, disabled } = useExtensions.getState();

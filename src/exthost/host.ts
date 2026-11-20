@@ -1030,7 +1030,8 @@ export function startExtensionHost() {
     if (s.state !== previous.state) scheduleSync(0);
   });
   useExtensions.subscribe((s, previous) => {
-    if (s.installed !== previous.installed) scheduleSync();
+    // During a batch of installs, once at the end (see extensions/builtinExtensions.ts).
+    if (!s.batchInstalling && (s.installed !== previous.installed || previous.batchInstalling)) scheduleSync();
     // `window.activeColorTheme` follows the editor theme.
     if (s.activeThemeId !== previous.activeThemeId && rpc.isRunning()) rpc.notify("theme/changed", { kind: activeThemeKind() });
   });
