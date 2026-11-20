@@ -365,7 +365,8 @@ fn arguments(kind: Kind, request: &AiRequest) -> Vec<String> {
             push(&["-"]);
         }
         Kind::OpenCode => {
-            push(&["run", "--format", "json", "--agent", if request.agent && !request.one_shot { "build" } else { "plan" }]);
+            // `--dir`: OpenCode takes its folder from `PWD` before the process's own.
+            push(&["run", "--format", "json", "--dir", &request.cwd, "--agent", if request.agent && !request.one_shot { "build" } else { "plan" }]);
             if let Some(model) = model {
                 push(&["-m", model]);
             }
@@ -578,13 +579,17 @@ impl Parser {
             }
             Some("tool_use") => events.push(AiEvent::Tool {
                 title: part["tool"].as_str().unwrap_or("Tool").into(),
-                detail: part["state"]["title"].as_str().map(|t| truncate(t, 200)).or_else(|| tool_detail(&part["state"]["input"])),
+                // The input's path is whole; OpenCode's title cuts the path's start.
+                detail: tool_detail(&part["state"]["input"]).or_else(|| part["state"]["title"].as_str().map(|t| truncate(t, 200))),
             }),
             Some("step_finish") => {
+                // Each step is one request: its total is what the context holds.
                 let tokens = &part["tokens"];
-                let used = ["input", "output"].iter().map(|k| tokens[k].as_u64().unwrap_or(0)).sum::<u64>()
-                    + tokens["cache"]["read"].as_u64().unwrap_or(0)
-                    + tokens["cache"]["write"].as_u64().unwrap_or(0);
+                let used = tokens["total"].as_u64().unwrap_or_else(|| {
+                    ["input", "output"].iter().map(|k| tokens[k].as_u64().unwrap_or(0)).sum::<u64>()
+                        + tokens["cache"]["read"].as_u64().unwrap_or(0)
+                        + tokens["cache"]["write"].as_u64().unwrap_or(0)
+                });
                 if used > 0 {
                     events.push(AiEvent::Usage { used, window: None });
                 }
@@ -642,6 +647,9 @@ fn start(runs: Arc<AiRuns>, request: AiRequest, send: impl Fn(AiEvent) + Send + 
     command
         .args(arguments(kind, &request))
         .current_dir(&request.cwd)
+        // Programs that read `PWD` (OpenCode) would otherwise get the folder PowerCode was
+        // started from, e.g. the terminal's in a `tauri dev` run.
+        .env("PWD", &request.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -747,7 +755,9 @@ mod tests {
             ["exec", "-c", "sandbox_mode=\"read-only\"", "--skip-git-repo-check", "resume", "t1", "--json", "-m", "gpt-x", "-"]
         );
         assert!(arguments(Kind::Codex, &request(true, None, "", false)).contains(&"sandbox_mode=\"workspace-write\"".to_string()));
-        assert_eq!(arguments(Kind::OpenCode, &request(false, Some("ses_1"), "", false)), ["run", "--format", "json", "--agent", "plan", "--session", "ses_1"]);
+        let mut in_folder = request(false, Some("ses_1"), "", false);
+        in_folder.cwd = "C:\\w".into();
+        assert_eq!(arguments(Kind::OpenCode, &in_folder), ["run", "--format", "json", "--dir", "C:\\w", "--agent", "plan", "--session", "ses_1"]);
         // A one-off answer is read-only and saves nothing, whatever the mode.
         let one_shot = arguments(Kind::Claude, &request(true, None, "haiku", true));
         assert!(one_shot.contains(&"--no-session-persistence".to_string()) && !one_shot.contains(&"acceptEdits".to_string()));
@@ -828,6 +838,8 @@ mod tests {
             &[
                 r#"{"type":"tool_use","sessionID":"ses_1","part":{"tool":"read","state":{"status":"completed","title":"src/a.ts"}}}"#,
                 r#"{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"It exports a."}}"#,
+                r#"{"type":"step_finish","sessionID":"ses_1","part":{"type":"step-finish","tokens":{"total":10724,"input":224,"output":4,"reasoning":0,"cache":{"write":0,"read":10496}},"cost":0}}"#,
+                r#"{"type":"tool_use","sessionID":"ses_1","part":{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"C:\\w\\b.txt"}}}}"#,
             ],
         );
         assert_eq!(
@@ -836,6 +848,8 @@ mod tests {
                 AiEvent::Session { id: "ses_1".into() },
                 AiEvent::Tool { title: "read".into(), detail: Some("src/a.ts".into()) },
                 AiEvent::Text { text: "It exports a.".into(), start: true },
+                AiEvent::Usage { used: 10724, window: None },
+                AiEvent::Tool { title: "read".into(), detail: Some("C:\\w\\b.txt".into()) },
             ]
         );
         let (events, _) = parse(Kind::OpenCode, &["plain one", "plain two"]);
@@ -850,11 +864,15 @@ mod tests {
     }
 
     /// The real programs, when installed: `cargo test --lib ai::tests::real -- --ignored --nocapture`.
-    /// Paths come from AI_CLAUDE / AI_CODEX / AI_OPENCODE (else detection on PATH).
+    /// Paths come from AI_CLAUDE / AI_CODEX / AI_OPENCODE (else detection on PATH), models from
+    /// AI_<PROGRAM>_MODEL; AI_ONLY=opencode (for example) tests one program.
     #[test]
     #[ignore]
     fn real_programs_answer_and_continue() {
         for kind in KINDS {
+            if std::env::var("AI_ONLY").is_ok_and(|only| only != kind.id()) {
+                continue;
+            }
             let path = std::env::var(format!("AI_{}", kind.id().to_uppercase())).ok().map(PathBuf::from).or_else(|| find_program(kind.id(), &search_dirs()));
             let Some(path) = path else {
                 println!("{}: not installed", kind.name());
@@ -869,7 +887,7 @@ mod tests {
                 let request = AiRequest {
                     provider: kind.id().into(),
                     path: path.to_string_lossy().into(),
-                    model: Some(if kind == Kind::Claude { "haiku".into() } else { String::new() }),
+                    model: std::env::var(format!("AI_{}_MODEL", kind.id().to_uppercase())).ok().or_else(|| (kind == Kind::Claude).then(|| "haiku".into())),
                     prompt: prompt.into(),
                     cwd: cwd.to_string_lossy().into(),
                     agent,

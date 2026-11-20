@@ -167,11 +167,16 @@ export function useChatSelection(): { provider: AiProvider | null; model: string
 /** The program and model for commit messages: their own settings, else the chat's program. */
 export function commitSelection(values = useUserSettings.getState().values): { provider: AiProvider | null; model: string } {
   const wanted = setting("ai.commitMessage.provider", "", values) || setting("ai.provider", "", values);
-  return { provider: pick(useAi.getState().providers, wanted), model: setting("ai.commitMessage.model", "", values) };
+  const provider = pick(useAi.getState().providers, wanted);
+  const model = setting("ai.commitMessage.model", "", values);
+  // A model of another program (saved before the program changed) means its default.
+  const known = provider ? useAi.getState().models[provider.id] : undefined;
+  return { provider, model: known && !known.some((m) => m.id === model) ? "" : model };
 }
 
 export function useCommitSelection(): { provider: AiProvider | null; model: string } {
   useAi((s) => s.providers);
+  useAi((s) => s.models);
   const values = useUserSettings((s) => s.values);
   return commitSelection(values);
 }
@@ -179,13 +184,22 @@ export function useCommitSelection(): { provider: AiProvider | null; model: stri
 /** Choosing another program also goes back to its default model (model names differ). */
 export async function setChatProvider(id: AiProviderId) {
   if (setting<string>("ai.provider", "", useUserSettings.getState().values) === id) return;
-  await setUserSetting("ai.provider", id);
+  await switchChatProvider(id);
   await setUserSetting("ai.model", undefined);
+}
+
+/** Commit messages that follow the chat's program lose a model of the previous one. */
+async function switchChatProvider(id: AiProviderId) {
+  const values = useUserSettings.getState().values;
+  await setUserSetting("ai.provider", id);
+  if (!setting("ai.commitMessage.provider", "", values) && setting("ai.commitMessage.model", "", values)) {
+    await setUserSetting("ai.commitMessage.model", undefined);
+  }
 }
 
 /** A model of any program, from the AI tool window's unified picker. */
 export async function setChatChoice(provider: AiProviderId, model: string) {
-  if (setting<string>("ai.provider", "", useUserSettings.getState().values) !== provider) await setUserSetting("ai.provider", provider);
+  if (setting<string>("ai.provider", "", useUserSettings.getState().values) !== provider) await switchChatProvider(provider);
   await setUserSetting("ai.model", model || undefined);
 }
 

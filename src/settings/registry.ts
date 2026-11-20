@@ -279,7 +279,7 @@ export const BUILTIN_SECTIONS: SettingsSection[] = [
         type: "enum",
         default: "",
         binding: {
-          use: () => useUserSettings((s) => setting("ai.commitMessage.model", "", s.values)),
+          use: () => useCommitSelection().model,
           set: (value) => void setUserSetting("ai.commitMessage.model", value || undefined),
           useOptions: () => useModelOptions(useCommitSelection().provider?.id),
         },
