@@ -1,6 +1,6 @@
 import { useEffect, type ReactNode } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
-import { closeActiveTab, lastRoot, openFolder, openSettings, saveActive } from "./actions";
+import { closeActiveTab, lastRoot, openFolder, openSettings, saveActive, windowRoot } from "./actions";
 import { isNewWindow, listenForOpenRequests, openFiles, takeStartupRequests } from "./cli";
 import { MainToolbar, StatusBar } from "./components/Chrome";
 import { EditorArea, activeEditor } from "./components/EditorArea";
@@ -172,8 +172,13 @@ export default function App() {
     listenForOpenRequests();
     void Promise.all([takeStartupRequests(), isNewWindow()]).then(async ([requests, newWindow]) => {
       const folder = requests.find((r) => r.isDir);
+      // Reload Window: the folder this window had (another window may have opened the last one since).
+      const reloaded = windowRoot();
       const previous = lastRoot();
       if (folder) await openFolder(folder.path);
+      else if (reloaded !== null) {
+        if (reloaded) await openFolder(reloaded);
+      }
       // A new window starts empty; the first one reopens the last folder.
       else if (previous && !newWindow) await openFolder(previous);
       openFiles(requests);

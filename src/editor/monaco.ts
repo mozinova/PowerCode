@@ -4,6 +4,7 @@ import JsonWorker from "monaco-editor/languages/features/json/json.worker?worker
 import CssWorker from "monaco-editor/languages/features/css/css.worker?worker";
 import HtmlWorker from "monaco-editor/languages/features/html/html.worker?worker";
 import TsWorker from "monaco-editor/languages/features/typescript/ts.worker?worker";
+import { applyRememberedLanguages } from "./builtinLanguages";
 import { POWERCODE_DARK, defineEditorTheme } from "./themes";
 
 self.MonacoEnvironment = {
@@ -30,5 +31,7 @@ self.MonacoEnvironment = {
 
 defineEditorTheme(POWERCODE_DARK);
 monaco.editor.setTheme(POWERCODE_DARK.id);
+// Before any model: languages an extension serves start without Monaco's own service.
+applyRememberedLanguages();
 
 export { monaco };

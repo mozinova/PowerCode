@@ -113,6 +113,8 @@ interface Registration {
   kind: string;
   languages: string[];
   metadata?: any;
+  /** The extension that registered it. */
+  extension?: string;
 }
 
 let flushDocument: (uri: string) => void = () => {};
@@ -608,7 +610,7 @@ export async function searchWorkspaceSymbols(query: string): Promise<WorkspaceSy
 
 export function registerProvider(r: Registration) {
   // Monaco's own TypeScript, JSON, CSS or HTML service gives way to the extension's.
-  extensionServes(r.handle, r.kind, r.languages);
+  extensionServes(r.handle, r.kind, r.languages, r.extension ?? "");
   if (r.kind === "workspaceSymbols") {
     workspaceSymbolProviders.add(r.handle);
     registrations.set(r.handle, [{ dispose: () => workspaceSymbolProviders.delete(r.handle) }]);

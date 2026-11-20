@@ -41,6 +41,29 @@ export function lastRoot(): string | null {
   }
 }
 
+/**
+ * This window's folder, kept in `sessionStorage`: it is the window's own and survives
+ * Reload Window, while `localStorage` (the last folder) is shared by every window.
+ * "" means the window had no folder; null, that it was not loaded before.
+ */
+const WINDOW_ROOT_KEY = "powercode.windowRoot";
+
+export function windowRoot(): string | null {
+  try {
+    return sessionStorage.getItem(WINDOW_ROOT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setWindowRoot(root: string) {
+  try {
+    sessionStorage.setItem(WINDOW_ROOT_KEY, root);
+  } catch {
+    // A reload then reopens the last folder, as a new start does.
+  }
+}
+
 async function confirmDiscard(names: string[]): Promise<boolean> {
   if (names.length === 0) return true;
   const list = names.map((n) => `• ${n}`).join("\n");
@@ -78,6 +101,7 @@ export async function openFolder(path?: string) {
   restoreTabs(root);
   endSshSession(previous, root);
   addRecentProject(root);
+  setWindowRoot(root);
   try {
     localStorage.setItem(LAST_ROOT_KEY, root);
   } catch {
@@ -122,6 +146,7 @@ export async function closeFolder(): Promise<boolean> {
   enterFolder(null);
   useWorkspace.getState().closeFolder();
   endSshSession(root, null);
+  setWindowRoot("");
   try {
     localStorage.removeItem(LAST_ROOT_KEY);
   } catch {

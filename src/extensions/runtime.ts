@@ -7,6 +7,7 @@ import { create } from "zustand";
 import { monaco } from "../editor/monaco";
 import { attachGrammar, registerGrammar } from "../editor/textmate";
 import { POWERCODE_DARK, applyEditorTheme, type EditorTheme } from "../editor/themes";
+import { forgetRemovedExtensions } from "../editor/builtinLanguages";
 import { joinPath } from "../lib/paths";
 import { track } from "../state/activity";
 import { errorMessage, extensionsApi, INSTALL_CANCELLED, type DownloadProgress, type InstalledExtension } from "../lib/ipc";
@@ -325,6 +326,7 @@ async function loadExtensions() {
   }
   useExtensions.setState({ disabled: all.filter((ext) => ext.disabled) });
   setInstalled(installed);
+  forgetRemovedExtensions(installed.map((e) => e.id));
   await setEditorTheme(storedThemeId()).catch(() => setEditorTheme(BUILTIN_THEME.id));
   await setIconTheme(storedIconThemeId()).catch(() => setIconTheme(BUILTIN_ICON_THEME_ID));
   offerMissingDependencies();
