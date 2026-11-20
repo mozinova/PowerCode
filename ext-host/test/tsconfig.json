@@ -1,0 +1,9 @@
+{
+  // The tests run with `bun test` (bun:test); they also import UI modules (../../src).
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node", "bun"],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["."]
+}

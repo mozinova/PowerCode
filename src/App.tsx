@@ -26,6 +26,7 @@ import { ExtensionViewContainer } from "./components/ExtensionViews";
 import { HostDialogs } from "./components/HostDialogs";
 import { OutputPanel } from "./components/OutputPanel";
 import { Toasts } from "./components/Toasts";
+import { TextFieldMenus } from "./components/TextFieldMenu";
 import { TooltipLayer } from "./components/Tooltip";
 import { TrustDialog } from "./components/TrustDialog";
 import { GitHubSignIn } from "./components/GitHubSignIn";
@@ -121,17 +122,6 @@ function useGlobalShortcuts() {
   }, []);
 }
 
-/** Suppresses the WebView's browser context menu outside text fields; the IDE provides its own menus. */
-function useNoNativeContextMenu() {
-  useEffect(() => {
-    const onContextMenu = (e: MouseEvent) => {
-      const target = e.target as Element | null;
-      if (!target?.closest("input, textarea, [contenteditable=true]")) e.preventDefault();
-    };
-    document.addEventListener("contextmenu", onContextMenu);
-    return () => document.removeEventListener("contextmenu", onContextMenu);
-  }, []);
-}
 
 export default function App() {
   const leftTool = useWorkspace((s) => s.leftTool);
@@ -139,7 +129,6 @@ export default function App() {
   const rightTool = useWorkspace((s) => s.rightTool);
 
   useGlobalShortcuts();
-  useNoNativeContextMenu();
 
   useEffect(() => {
     // Runs once per app, not per (StrictMode) mount.
@@ -243,6 +232,7 @@ export default function App() {
       <GitHubSignIn />
       <HostDialogs />
       <Toasts />
+      <TextFieldMenus />
       <TooltipLayer />
     </div>
   );

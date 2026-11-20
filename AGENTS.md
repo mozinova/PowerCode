@@ -90,6 +90,7 @@ Run what applies, from the repository root:
 ```sh
 bun x tsc --noEmit -p .          # UI types
 bun x tsc -p ext-host            # extension host types
+bun x tsc -p ext-host/test       # test types (bun:test)
 bun run build:exthost            # bundle the host (src-tauri/resources/ext-host.cjs)
 bun run test                     # TypeScript tests (ext-host/test)
 bun run build                    # UI build (tsc + vite)
