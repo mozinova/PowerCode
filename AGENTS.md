@@ -28,8 +28,9 @@ Guide for AI agents (Claude, Codex, Gemini, ...) working on this repository.
 A lightweight desktop IDE: **Tauri 2 + Rust** backend, **React 19 + TypeScript +
 Tailwind v4** UI, **Monaco** editor, IntelliJ "New UI" dark look. It runs **VS Code
 extensions from Open VSX**, including their JavaScript, through its own extension
-host (a bundled Node.js sidecar implementing the `vscode` API). Windows and Linux
-are released; macOS builds but is not released. Package manager: **bun**.
+host (a bundled Node.js sidecar implementing the `vscode` API). Windows, Linux and
+macOS (Apple Silicon and Intel, not signed yet) are released; macOS is the least
+tested. Package manager: **bun**.
 
 ## Layout
 
@@ -119,7 +120,9 @@ that type checks could not.
   0.1.82, so continue from the current value (0.1.82 → 0.1.83). Versions compare
   numerically: 0.1.9 would be *older* than 0.1.81, so never go back to it.
 - Tags are `vX.Y.Z`. Pushing one runs `release.yml`, which builds Windows (.exe,
-  .msi) and Linux (.deb, .rpm, .AppImage) and attaches them to a **draft** release.
+  .msi), Linux (.deb, .rpm, .AppImage) and macOS (.dmg, Apple Silicon and Intel,
+  the Intel one cross-compiled on the Apple Silicon runner) and attaches them to a
+  **draft** release.
   The maintainer publishes it.
 - Every push to a branch runs `windows-build.yml`: Windows installers only, kept
   as workflow artifacts for 14 days, never released. Markdown-only pushes skip it.

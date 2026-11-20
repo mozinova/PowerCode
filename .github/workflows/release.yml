@@ -1,5 +1,5 @@
-# Builds PowerCode for Windows and Linux when a tag is pushed, and attaches the
-# installers to a draft GitHub release.
+# Builds PowerCode for Windows, Linux and macOS (Apple Silicon and Intel) when a
+# tag is pushed, and attaches the installers to a draft GitHub release.
 #
 #   git tag v0.2.0 && git push origin v0.2.0
 #
@@ -32,6 +32,14 @@ jobs:
             runner: windows-latest
           - name: Linux (x64)
             runner: ubuntu-22.04
+          # GitHub's macOS runners are Apple Silicon: the Intel build is cross-compiled
+          # there (scripts/fetch-node.mjs bundles the Node.js of the target).
+          - name: macOS (Apple Silicon)
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - name: macOS (Intel)
+            runner: macos-latest
+            target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
 
     steps:
@@ -50,11 +58,13 @@ jobs:
       - uses: oven-sh/setup-bun@v2
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-          key: ${{ matrix.runner }}
+          key: ${{ matrix.runner }}-${{ matrix.target }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -97,12 +107,17 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tauriScript: bun tauri
+          args: ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
           tagName: ${{ github.ref_name }}
           releaseName: PowerCode ${{ github.ref_name }}
           releaseBody: |
-            Installers for Windows and Linux.
+            Installers for Windows, Linux and macOS.
 
             - **Windows**: `.exe` (installer) or `.msi`
             - **Linux**: `.deb`, `.rpm` or `.AppImage`
+            - **macOS**: `.dmg` for Apple Silicon (`aarch64`) or Intel (`x64`). The app is not
+              signed yet: the first time, right-click it and choose Open, or run
+              `xattr -dr com.apple.quarantine /Applications/PowerCode.app`.
           releaseDraft: true
-          prerelease: false
+          # A tag with a suffix (v1.2.0-beta) is a pre-release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
