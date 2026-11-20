@@ -35,7 +35,7 @@ function onAnswerClick(e: MouseEvent) {
   if (/^https?:\/\//i.test(href)) void openUrl(href);
 }
 
-function Markdown({ text }: { text: string }) {
+export function Markdown({ text }: { text: string }) {
   // From an extension (often a model's output): sanitized before rendering.
   const html = useMemo(() => DOMPurify.sanitize(marked.parse(text, { async: false })), [text]);
   return <div onClick={onAnswerClick} className="markdown-body min-w-0 text-[13px]" dangerouslySetInnerHTML={{ __html: html }} />;

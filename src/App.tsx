@@ -17,6 +17,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { DebugConsole } from "./components/DebugConsole";
 import { DebugView } from "./components/DebugView";
 import { TestingView } from "./components/TestingView";
+import { AiView } from "./components/AiView";
 import { ChatView } from "./components/ChatView";
 import { HierarchyView } from "./components/HierarchyView";
 import { showHierarchy } from "./exthost/hierarchy";
@@ -56,6 +57,7 @@ const TOOL_WINDOWS: Partial<Record<ToolId, ReactNode>> = {
   debug: <DebugView />,
   testing: <TestingView />,
   chat: <ChatView />,
+  ai: <AiView />,
   hierarchy: <HierarchyView />,
 };
 

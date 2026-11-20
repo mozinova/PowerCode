@@ -1,10 +1,12 @@
 import { ChevronDown, Loader2 } from "lucide-react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type ReactNode } from "react";
 import { DropdownMenu } from "./Menu";
 
 export interface SelectOption {
   id: string;
   label: string;
+  /** Shown before the label, in the button and the list. */
+  icon?: ReactNode;
 }
 
 /** A select styled like the app's menus, instead of the WebView's native popup. */
@@ -39,6 +41,7 @@ export function Select({
           open ? "border-accent" : "border-input-border hover:border-fg-subtle focus-visible:border-accent"
         }`}
       >
+        {current?.icon}
         <span className="min-w-0 flex-1 truncate">{current?.label ?? value}</span>
         {busy ? (
           <Loader2 size={14} className="shrink-0 animate-spin text-fg-muted" />
@@ -55,6 +58,7 @@ export function Select({
           // Long lists (e.g. branches) scroll, opened at the current option.
           scrollItems={options.map((option) => ({
             label: option.label,
+            icon: option.icon,
             checked: option.id === value,
             action: () => option.id !== value && onChange(option.id),
           }))}

@@ -13,6 +13,7 @@ export type ToolId =
   | "debug"
   | "testing"
   | "chat"
+  | "ai"
   | "hierarchy"
   | `view:${string}`;
 export type BottomTool = "terminal" | "output" | "debug";

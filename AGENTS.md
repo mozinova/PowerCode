@@ -43,10 +43,11 @@ is the least tested. Package manager: **bun**.
 | `src/state/` | zustand stores: `workspace` (groups, tabs, tools), `trust`, `session`, `recentProjects`, `settings`, ... |
 | `src/extensions/` | Installing extensions and their declarative parts (themes, grammars, snippets, icon themes). |
 | `src/git`, `src/terminal`, `src/debug`, `src/search`, `src/settings` | Built-in features. |
+| `src/ai` | AI tool window and commit messages through the installed Claude Code / Codex / OpenCode programs (`src-tauri/src/ai.rs` finds and runs them). |
 | `ext-host/src/` | The extension host (Node). `api.ts` builds the `vscode` module; `types.ts` holds API classes; one module per area (`views`, `providers`, `debug`, `tasks`, `scm`, `testing`, `comments`, `chat`, `lm`, `authentication`, `virtual`, `tabs`, `terminals`, `files`, ...). |
 | `ext-host/src/surface.ts` | Generated from `@types/vscode` (`bun run gen:vscode-surface`): every API member, so missing ones are filled with inert stand-ins and extensions still activate. |
 | `ext-host/test/` | TypeScript tests (`bun run test`). |
-| `src-tauri/src/` | Rust commands: `fs`, `git`, `terminal` (portable-pty), `search`, `extensions` (Open VSX), `exthost` (spawns the host), `remote` + `wsl` + `remote_exthost` (SSH/WSL), `secrets` (AES-GCM + OS keyring), `github_auth` (device flow), `webview` (webview protocol), `cli`, `system`. Unit tests live in each file (`#[cfg(test)]`). |
+| `src-tauri/src/` | Rust commands: `fs`, `git`, `terminal` (portable-pty), `search`, `extensions` (Open VSX), `exthost` (spawns the host), `remote` + `wsl` + `remote_exthost` (SSH/WSL), `secrets` (AES-GCM + OS keyring), `ai` (AI programs: detection, models, runs), `github_auth` (device flow), `webview` (webview protocol), `cli`, `system`. Unit tests live in each file (`#[cfg(test)]`). |
 | `todo.md` | VS Code API gaps. Tick items you implement, note what is still missing. |
 | `.github/workflows/release.yml` | Release build on tag push. |
 | `.github/workflows/windows-build.yml` | Windows build on branch push, as artifacts only. |
@@ -143,8 +144,9 @@ that type checks could not.
   `cargo test -- --include-ignored`.
 - `gh` is authenticated for `mozinova/PowerCode`; use it for issues, runs and releases.
 - Do not run the installed PowerCode or `tauri dev` on the maintainer's desktop
-  without asking. The app is single-instance, and a dev run hands over to the
-  running app.
+  without asking. The release app is single-instance; debug builds (`tauri dev`)
+  skip that so they can run next to it, but share its data folder (extensions,
+  settings).
 
 ## Where things stand
 

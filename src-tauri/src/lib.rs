@@ -1,3 +1,4 @@
+mod ai;
 mod cli;
 mod error;
 mod extensions;
@@ -24,7 +25,9 @@ pub fn run() {
     let mut builder = tauri::Builder::default();
     // A later `powercode <path>` hands its paths to the running window and exits; one
     // started with `--new-window` (New Window, `powercode -n`) is a window of its own.
-    if !cli::wants_new_window(&args) {
+    // Debug builds (`tauri dev`) share the identifier with the installed app: they
+    // would hand over to it and exit, so they always run on their own.
+    if !cfg!(debug_assertions) && !cli::wants_new_window(&args) {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
             cli::deliver(app, cli::parse_args(&argv, std::path::Path::new(&cwd)));
         }));
@@ -40,6 +43,7 @@ pub fn run() {
         .manage(webview::Webviews::default())
         .manage(cli::CliState::from_process())
         .manage(secrets::Secrets::default())
+        .manage(std::sync::Arc::new(ai::AiRuns::default()))
         .setup(|app| {
             use tauri::Manager;
             if let Ok(data) = app.path().app_data_dir() {
@@ -78,6 +82,7 @@ pub fn run() {
             git::git_pull,
             git::git_push,
             git::git_log,
+            git::git_commit_context,
             git::git_commit_details,
             git::git_show_at,
             git::git_checkout_revision,
@@ -106,6 +111,10 @@ pub fn run() {
             cli::cli_launch_info,
             cli::cli_new_window,
             jumplist::system_update_jump_list,
+            ai::ai_detect,
+            ai::ai_models,
+            ai::ai_run,
+            ai::ai_cancel,
             github_auth::github_device_start,
             github_auth::github_device_check,
             github_auth::github_user,

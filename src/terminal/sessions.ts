@@ -5,6 +5,7 @@ import { create } from "zustand";
 import { terminalApi, type TerminalProfile, type TerminalProgram } from "../lib/ipc";
 import { remoteLabel, remoteOf } from "../lib/remote";
 import { setting, useUserSettings } from "../settings/store";
+import { linkProvider, openTerminalUrl } from "./links";
 
 const THEME: ITheme = {
   background: "#1e1f22",
@@ -77,6 +78,13 @@ export class TerminalSession {
     cursorBlink: true,
     allowProposedApi: true,
     scrollback: 10000,
+    // Hyperlinks programs print (OSC 8), as the detected ones: Ctrl+Click (Cmd on macOS).
+    linkHandler: {
+      activate: (event, uri) => {
+        if (navigator.userAgent.includes("Mac") ? event.metaKey : event.ctrlKey) openTerminalUrl(uri);
+      },
+      allowNonHttpProtocols: true,
+    },
   });
   private readonly fit = new FitAddon();
   private ptyId: number | null = null;
@@ -97,6 +105,7 @@ export class TerminalSession {
     this.title = title;
     this.host.style.height = "100%";
     this.term.loadAddon(this.fit);
+    this.term.registerLinkProvider(linkProvider(this.term, () => this.cwd));
     this.term.attachCustomKeyEventHandler((e) => this.clipboardKey(e));
     // After the creator registered its listeners.
     queueMicrotask(() => void this.start());

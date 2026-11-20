@@ -141,6 +141,8 @@ function createProvider(r: Registration, language: string): monaco.IDisposable |
             position: toPosition(position),
             triggerCharacter: context.triggerCharacter,
           });
+          // The host answers null when the document is outside the provider's selector.
+          if (!result) return { suggestions: [] };
           const word = model.getWordUntilPosition(position);
           const fallback = new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, position.column);
           return {

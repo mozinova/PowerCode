@@ -951,6 +951,9 @@ export function createApi(description: ExtensionDescription) {
       registerFileDecorationProvider: () => new Disposable(() => {}),
       registerTerminalLinkProvider: () => new Disposable(() => {}),
       registerTerminalProfileProvider: () => new Disposable(() => {}),
+      // Proposed API (`terminalQuickFixProvider`), called unguarded by the built-in npm
+      // extension; not in @types/vscode, so the generated surface has no stand-in.
+      registerTerminalQuickFixProvider: () => new Disposable(() => {}),
       createQuickPick,
       createInputBox,
     },

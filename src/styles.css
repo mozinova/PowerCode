@@ -372,3 +372,17 @@ body {
   background: transparent;
   box-shadow: inset 0 0 0 1.5px #db5c5c;
 }
+
+/* The AI tool window's working indicator: a 3x3 square of dots filling up one by
+   one (each dot is delayed by its index), held full, then emptying the same way. */
+@keyframes pc-dot {
+  0%, 4% { opacity: 0.18; }
+  9%, 66% { opacity: 1; }
+  71%, 100% { opacity: 0.18; }
+}
+.pc-dots > span {
+  animation: pc-dot 1.9s ease-in-out infinite both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .pc-dots > span { animation: none; opacity: 0.6; }
+}

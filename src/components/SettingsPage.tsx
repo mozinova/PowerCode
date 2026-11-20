@@ -76,7 +76,7 @@ function EnumField({ options, value, onCommit }: { options: SettingOption[]; val
     <div className="mt-1.5 max-w-xs">
       <div className="flex">
         <Select
-          options={options.map((o, i) => ({ id: String(i), label: o.label }))}
+          options={options.map((o, i) => ({ id: String(i), label: o.label, icon: o.icon }))}
           value={current ? String(options.indexOf(current)) : ""}
           onChange={(id) => onCommit(options[Number(id)].value)}
         />

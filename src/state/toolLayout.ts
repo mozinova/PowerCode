@@ -38,7 +38,7 @@ export function sideOf(id: string): Side {
 }
 
 /** Built-in tools that start in the right sidebar, as VS Code's secondary sidebar holds Chat. */
-const BUILTIN_RIGHT = ["chat"];
+const BUILTIN_RIGHT = ["chat", "ai"];
 
 export function setRightDefaults(ids: string[]) {
   const current = useToolLayout.getState().rightDefaults;

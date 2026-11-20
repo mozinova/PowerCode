@@ -321,6 +321,74 @@ export const gitApi = {
   fetch: (root: string) => invoke<string>("git_fetch", { root }),
   pull: (root: string) => invoke<string>("git_pull", { root }),
   push: (root: string) => invoke<string>("git_push", { root }),
+  /** The diff a commit message is written from, the new files and recent subjects. */
+  commitContext: (root: string) => invoke<CommitContext>("git_commit_context", { root }),
+};
+
+export interface CommitContext {
+  /** The diff is of the staged changes; otherwise of every change. */
+  staged: boolean;
+  diff: string;
+  untracked: string[];
+  recent: string[];
+}
+
+// ---- AI assistants ------------------------------------------------------------------
+
+export type AiProviderId = "claude" | "codex" | "opencode";
+
+export interface AiProvider {
+  id: AiProviderId;
+  name: string;
+  path: string;
+  version: string | null;
+  /** Found inside an installed extension rather than installed on its own. */
+  bundled: boolean;
+}
+
+export interface AiModel {
+  /** Empty for the program's own default. */
+  id: string;
+  name: string;
+  description: string | null;
+  /** Tokens the model takes in, when known before a run. */
+  contextWindow: number | null;
+}
+
+export interface AiRequest {
+  provider: AiProviderId;
+  path: string;
+  model: string | null;
+  prompt: string;
+  cwd: string;
+  /** May edit files; otherwise read-only. */
+  agent: boolean;
+  /** Continues this conversation of the program. */
+  session: string | null;
+  /** A one-off answer: no tools, nothing saved. */
+  oneShot: boolean;
+}
+
+export type AiEvent =
+  | { kind: "session"; id: string }
+  | { kind: "text"; text: string; start: boolean }
+  | { kind: "tool"; title: string; detail: string | null }
+  | { kind: "notice"; text: string }
+  /** Tokens in the conversation's context, and the model's window when the program says. */
+  | { kind: "usage"; used: number; window: number | null }
+  | { kind: "done"; error: string | null };
+
+export const aiApi = {
+  /** The AI programs found; `paths` (by provider) are the ones set in the settings. */
+  detect: (paths: Partial<Record<AiProviderId, string>>) => invoke<AiProvider[]>("ai_detect", { paths }),
+  models: (provider: AiProviderId, path: string) => invoke<AiModel[]>("ai_models", { provider, path }),
+  /** Starts a request; returns its id (for `cancel`). Events end with `done`. */
+  run: (request: AiRequest, onEvent: (event: AiEvent) => void) => {
+    const channel = new Channel<AiEvent>();
+    channel.onmessage = onEvent;
+    return invoke<number>("ai_run", { request, onEvent: channel });
+  },
+  cancel: (id: number) => invoke<void>("ai_cancel", { id }),
 };
 
 export interface SshHost {

@@ -1,4 +1,4 @@
-import { Blocks, Bug, FlaskConical, ListTree, MessagesSquare, Folder, GitCommitHorizontal, ScrollText, Search, Server, SquareChevronRight, SquareTerminal, type LucideIcon } from "lucide-react";
+import { Blocks, Bug, FlaskConical, ListTree, MessagesSquare, Folder, GitCommitHorizontal, ScrollText, Search, Server, Sparkles, SquareChevronRight, SquareTerminal, type LucideIcon } from "lucide-react";
 import { useHierarchy } from "../exthost/hierarchy";
 import { useRef, type ReactNode } from "react";
 import { create } from "zustand";
@@ -44,6 +44,7 @@ function useToolEntries(): ToolEntry[] {
     { id: "debug", title: "Run and Debug", shortcut: "Ctrl+Shift+D", icon: lucide(Bug), badge: 0 },
     ...(hasTests ? [{ id: "testing" as const, title: "Testing", icon: lucide(FlaskConical), badge: failedTests }] : []),
     ...(hasChat ? [{ id: "chat" as const, title: "Chat", shortcut: "Ctrl+Alt+I", icon: lucide(MessagesSquare), badge: 0 }] : []),
+    { id: "ai", title: "AI", icon: lucide(Sparkles), badge: 0 },
     ...(hasHierarchy ? [{ id: "hierarchy" as const, title: "Hierarchy", icon: lucide(ListTree), badge: 0 }] : []),
     { id: "remote", title: "Remote Hosts", icon: lucide(Server), badge: 0 },
     { id: "extensions", title: "Extensions", shortcut: "Alt+2", icon: lucide(Blocks), badge: 0 },

@@ -151,15 +151,62 @@ interface RawSnippet {
   prefix: string | string[];
   body: string | string[];
   description?: string | string[];
+  /** Comma-separated languages, in a contribution without a `language`. */
+  scope?: string;
 }
 
-function registerSnippets(extensionId: string, language: string, path: string) {
+/** The languages a snippet names in its `scope`; none means every language. */
+function snippetScopes(snippet: RawSnippet): string[] {
+  return typeof snippet.scope === "string"
+    ? snippet.scope.split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+}
+
+/**
+ * A contribution with a `language` gives every snippet of its file to that language.
+ * One without (usually a `.code-snippets` file) leaves it to each snippet's `scope`,
+ * and a snippet without a scope is for every language, as in VS Code. Those are
+ * registered per scoped language once the file is read: a `*` registration ranks
+ * below a language's own providers, and Monaco stops at the first group that suggests.
+ */
+function registerSnippets(extensionId: string, language: unknown, path: string): monaco.IDisposable {
   let snippets: Promise<RawSnippet[]> | null = null;
-  return monaco.languages.registerCompletionItemProvider(language, {
+  const load = () =>
+    (snippets ??= readJsonc<Record<string, RawSnippet>>(extensionId, path).then((file) =>
+      Object.values(file ?? {}).filter((s) => s && s.prefix && s.body),
+    ));
+  if (typeof language === "string" && language) {
+    return monaco.languages.registerCompletionItemProvider(language, snippetProvider(load, () => true));
+  }
+  const registrations: monaco.IDisposable[] = [];
+  let disposed = false;
+  load()
+    .then((list) => {
+      if (disposed) return;
+      const languages = new Set(list.flatMap((s) => {
+        const scopes = snippetScopes(s);
+        return scopes.length ? scopes : ["*"];
+      }));
+      for (const id of languages) {
+        const applies = id === "*" ? (s: RawSnippet) => snippetScopes(s).length === 0 : (s: RawSnippet) => snippetScopes(s).includes(id);
+        registrations.push(monaco.languages.registerCompletionItemProvider(id, snippetProvider(load, applies)));
+      }
+    })
+    .catch((e) => console.warn(`[${extensionId}] invalid snippets ${path}`, e));
+  return {
+    dispose() {
+      disposed = true;
+      registrations.forEach((r) => r.dispose());
+    },
+  };
+}
+
+function snippetProvider(
+  load: () => Promise<RawSnippet[]>,
+  applies: (snippet: RawSnippet) => boolean,
+): monaco.languages.CompletionItemProvider {
+  return {
     async provideCompletionItems(model, position) {
-      snippets ??= readJsonc<Record<string, RawSnippet>>(extensionId, path).then((file) =>
-        Object.values(file ?? {}).filter((s) => s && s.prefix && s.body),
-      );
       const word = model.getWordUntilPosition(position);
       const range = new monaco.Range(
         position.lineNumber,
@@ -167,7 +214,7 @@ function registerSnippets(extensionId: string, language: string, path: string) {
         position.lineNumber,
         word.endColumn,
       );
-      const suggestions = (await snippets).flatMap((snippet) => {
+      const suggestions = (await load()).filter(applies).flatMap((snippet) => {
         const body = Array.isArray(snippet.body) ? snippet.body.join("\n") : snippet.body;
         const description = Array.isArray(snippet.description)
           ? snippet.description.join("\n")
@@ -184,7 +231,7 @@ function registerSnippets(extensionId: string, language: string, path: string) {
       });
       return { suggestions };
     },
-  });
+  };
 }
 
 async function loadThemeFile(

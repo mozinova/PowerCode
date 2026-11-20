@@ -4,14 +4,19 @@
 import { EDITOR_DEFAULTS } from "../editor/options";
 import { setEditorTheme, useExtensions } from "../extensions/runtime";
 import { setIconTheme, useIconThemes } from "../extensions/iconThemes";
-import type { InstalledExtension } from "../lib/ipc";
+import type { AiProviderId, InstalledExtension } from "../lib/ipc";
 import { setAutoSave, setAutoUpdateExtensions, useSettings } from "../state/settings";
 import { setDefaultTerminalProfile, useTerminals } from "../terminal/sessions";
+import { createElement, useEffect, type ReactNode } from "react";
+import { AiIcon, modelIcon, providerIcon } from "../components/AiIcon";
+import { detectAiProviders, loadAiModels, setChatModel, setChatProvider, setCommitProvider, useAi, useChatSelection, useCommitSelection } from "../ai/store";
+import { setUserSetting, setting, useUserSettings } from "./store";
 
 export interface SettingOption {
   value: unknown;
   label: string;
   description?: string;
+  icon?: ReactNode;
 }
 
 export interface SettingDef {
@@ -44,6 +49,36 @@ export interface SettingsSection {
 }
 
 const MONO = EDITOR_DEFAULTS.fontFamily;
+
+/** The assistants found, for the AI settings (looking for them the first time). */
+function useProviderOptions(): SettingOption[] {
+  const providers = useAi((s) => s.providers);
+  const detected = useAi((s) => s.detected);
+  useEffect(() => void detectAiProviders(), []);
+  if (!detected) return [{ value: "", label: "Looking for assistants…" }];
+  if (providers.length === 0) return [{ value: "", label: "None found" }];
+  return providers.map((p) => ({
+    value: p.id,
+    label: `${p.name}${p.version ? ` ${p.version}` : ""}`,
+    description: p.path,
+    icon: createElement(AiIcon, { name: providerIcon(p.id) }),
+  }));
+}
+
+function useModelOptions(provider: AiProviderId | undefined): SettingOption[] {
+  const models = useAi((s) => (provider ? s.models[provider] : undefined));
+  const detected = useAi((s) => s.detected);
+  useEffect(() => {
+    if (provider && detected) void loadAiModels(provider);
+  }, [provider, detected]);
+  return (models ?? [{ id: "", name: "Default", description: null, contextWindow: null }]).map((m) => ({
+    value: m.id,
+    label: m.name,
+    description: m.description ?? undefined,
+    icon: provider ? createElement(AiIcon, { name: modelIcon(provider, m.id) }) : undefined,
+  }));
+}
+
 
 const choice = (value: string, label: string, description?: string): SettingOption => ({ value, label, description });
 
@@ -191,6 +226,67 @@ export const BUILTIN_SECTIONS: SettingsSection[] = [
       },
       { key: "terminal.integrated.fontFamily", group: "Terminal › Integrated", title: "Font Family", description: "Font family of terminals (empty uses the editor's).", type: "string", default: "" },
       { key: "terminal.integrated.fontSize", group: "Terminal › Integrated", title: "Font Size", description: "Font size of terminals in pixels.", type: "number", default: 13, minimum: 6, maximum: 100 },
+    ],
+  },
+  {
+    id: "ai",
+    title: "AI",
+    settings: [
+      {
+        key: "ai.provider",
+        group: "AI",
+        title: "Assistant",
+        description: "The AI assistant the AI tool window uses, among those found on this computer: Claude Code, Codex or OpenCode (their command-line programs).",
+        type: "enum",
+        default: "",
+        binding: {
+          use: () => useChatSelection().provider?.id ?? "",
+          set: (value) => void setChatProvider(value as AiProviderId),
+          useOptions: useProviderOptions,
+        },
+      },
+      {
+        key: "ai.model",
+        group: "AI",
+        title: "Model",
+        description: "The model the AI tool window uses.",
+        type: "enum",
+        default: "",
+        binding: {
+          use: () => useUserSettings((s) => setting("ai.model", "", s.values)),
+          set: (value) => setChatModel(String(value)),
+          useOptions: () => useModelOptions(useChatSelection().provider?.id),
+        },
+      },
+      {
+        key: "ai.commitMessage.provider",
+        group: "AI › Commit Message",
+        title: "Assistant",
+        description: "The assistant that writes commit messages (the sparkle button in the Commit tool window).",
+        type: "enum",
+        default: "",
+        binding: {
+          use: () => useUserSettings((s) => setting("ai.commitMessage.provider", "", s.values)),
+          set: (value) => void setCommitProvider(String(value)),
+          useOptions: () => [{ value: "", label: "Same as the AI tool window" }, ...useProviderOptions().filter((o) => o.value !== "")],
+        },
+      },
+      {
+        key: "ai.commitMessage.model",
+        group: "AI › Commit Message",
+        title: "Model",
+        description: "The model that writes commit messages. A fast one is enough.",
+        type: "enum",
+        default: "",
+        binding: {
+          use: () => useUserSettings((s) => setting("ai.commitMessage.model", "", s.values)),
+          set: (value) => void setUserSetting("ai.commitMessage.model", value || undefined),
+          useOptions: () => useModelOptions(useCommitSelection().provider?.id),
+        },
+      },
+      { key: "ai.claude.path", group: "AI › Paths", title: "Claude Code", description: "Path of the claude program. Empty: found on PATH, in the usual install folders or in the Claude Code extension.", type: "string", default: "" },
+      { key: "ai.codex.path", group: "AI › Paths", title: "Codex", description: "Path of the codex program. Empty: found on PATH, in the usual install folders or in the Codex extension.", type: "string", default: "" },
+      { key: "ai.opencode.path", group: "AI › Paths", title: "OpenCode", description: "Path of the opencode program. Empty: found on PATH or in the usual install folders.", type: "string", default: "" },
     ],
   },
   {

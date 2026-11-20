@@ -519,6 +519,52 @@ fn parse_log(output: &str) -> Vec<GitCommit> {
         .collect()
 }
 
+/// What a commit message is written from: the diff of the staged changes (or of
+/// every change when none are staged, as committing then stages them all), the new
+/// files, and the recent subjects, so the message follows the repository's style.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitContext {
+    staged: bool,
+    diff: String,
+    untracked: Vec<String>,
+    recent: Vec<String>,
+}
+
+/// Enough for a model to see what changed; huge diffs (lock files, generated code) are cut.
+const MAX_CONTEXT_DIFF: usize = 60_000;
+
+#[tauri::command]
+pub async fn git_commit_context(root: String) -> CmdResult<CommitContext> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let staged = !run(&root, &["diff", "--cached", "--name-only"])?.trim().is_empty();
+        let mut diff = if staged {
+            run(&root, &["diff", "--cached", "--no-color", "--no-ext-diff", "--patch-with-stat"])?
+        } else {
+            // Before the first commit there is no `HEAD` to compare with.
+            run(&root, &["diff", "HEAD", "--no-color", "--no-ext-diff", "--patch-with-stat"])
+                .or_else(|_| run(&root, &["diff", "--no-color", "--no-ext-diff", "--patch-with-stat"]))?
+        };
+        if diff.len() > MAX_CONTEXT_DIFF {
+            let mut cut = MAX_CONTEXT_DIFF;
+            while !diff.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            diff.truncate(cut);
+            diff.push_str("\n[diff truncated]\n");
+        }
+        let untracked = if staged {
+            Vec::new()
+        } else {
+            run(&root, &["ls-files", "--others", "--exclude-standard"]).unwrap_or_default().lines().take(200).map(str::to_string).collect()
+        };
+        let recent = run(&root, &["log", "-n", "10", "--format=%s"]).unwrap_or_default().lines().map(str::to_string).collect();
+        Ok(CommitContext { staged, diff, untracked, recent })
+    })
+    .await
+    .map_err(err)?
+}
+
 /// A page of history in topological order; `revision` is a branch name, or None for all branches.
 #[tauri::command]
 pub async fn git_log(root: String, revision: Option<String>, skip: u32, limit: u32) -> CmdResult<Vec<GitCommit>> {

@@ -10,14 +10,17 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  Sparkles,
   Undo2,
 } from "lucide-react";
 import { useCallback, useRef, useState, type ReactNode } from "react";
 import { Group as PanelGroup, Panel, Separator } from "react-resizable-panels";
+import { generateCommitMessage } from "../ai/store";
 import { commit, initRepository, openDiff, rollback, stage, unstage } from "../git/actions";
 import { GIT_COLORS, GIT_LETTERS, fileState, refreshGit, useGit } from "../git/store";
 import type { GitFile } from "../lib/ipc";
 import { basename, isWithin, parentDir } from "../lib/paths";
+import { notify } from "../state/notifications";
 import { showTrustDialog, useTrust } from "../state/trust";
 import { useWorkspace } from "../state/workspace";
 import { FileIcon } from "./FileIcon";
@@ -177,6 +180,32 @@ export function CommitView() {
   const toggleTool = useWorkspace((s) => s.toggleTool);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  // The commit message being written by the AI assistant, and how to stop it.
+  const [writing, setWriting] = useState<{ cancel?: () => void } | null>(null);
+
+  const writeMessage = async () => {
+    if (writing) {
+      writing.cancel?.();
+      setWriting(null);
+      return;
+    }
+    if (!root) return;
+    const run: { cancel?: () => void } = {};
+    setWriting(run);
+    try {
+      const text = await generateCommitMessage(root, run);
+      // Not if it was stopped meanwhile.
+      setWriting((current) => {
+        if (current === run) setMessage(text);
+        return current === run ? null : current;
+      });
+    } catch (e) {
+      setWriting((current) => {
+        if (current === run) notify("error", "Could not write a commit message", e instanceof Error ? e.message : String(e));
+        return current === run ? null : current;
+      });
+    }
+  };
 
   const files = status?.files.filter((f) => !f.ignored) ?? [];
   const staged = files.filter((f) => f.index && !f.conflicted);
@@ -227,20 +256,34 @@ export function CommitView() {
           </div>
           {/* As in VS Code: message and commit button on top, then changes and the graph. */}
           <div className="flex shrink-0 flex-col gap-2 px-3 pb-2">
-            <input
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  void submit("commit");
-                }
-              }}
-              placeholder={`Message (Enter to commit on "${status.branch ?? "HEAD"}")`}
-              spellCheck={false}
-              autoComplete="off"
-              className="h-8 w-full rounded-md border border-input-border bg-input px-2 text-fg outline-none placeholder:text-fg-subtle focus:border-accent"
-            />
+            <div className="relative">
+              <textarea
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter commits; Shift+Enter starts a new line (a message body).
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    void submit("commit");
+                  }
+                }}
+                // Short, on one line: the branch shows just above.
+                placeholder="Message (Enter to commit)"
+                spellCheck={false}
+                autoComplete="off"
+                rows={Math.min(6, Math.max(1, message.split("\n").length))}
+                className="block min-h-8 w-full resize-none rounded-md border border-input-border bg-input py-1.5 pr-8 pl-2 leading-[18px] text-fg outline-none placeholder:overflow-hidden placeholder:text-ellipsis placeholder:whitespace-nowrap placeholder:text-fg-subtle focus:border-accent"
+              />
+              <button
+                type="button"
+                {...tooltipProps(writing ? "Stop writing the message" : "Write the message with AI")}
+                aria-label={writing ? "Stop writing the message" : "Write the message with AI"}
+                onClick={() => void writeMessage()}
+                className="absolute top-1 right-1 flex size-6 items-center justify-center rounded text-fg-muted hover:bg-hover hover:text-fg"
+              >
+                {writing ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              </button>
+            </div>
             <CommitButton
               busy={busy}
               hasMessage={message.trim().length > 0}

@@ -49,6 +49,10 @@ compact toolbar, a dark theme.
   get the `vscode.git` API.
 - **Terminal** (a real PTY), **debugging** through the Debug Adapter Protocol,
   **testing**, **tasks** (`tasks.json` and extensions' tasks), find in files.
+- **AI:** an AI tool window that runs the assistant installed on your computer
+  (Claude Code, Codex or OpenCode, found automatically) without its terminal
+  interface, in Ask (read-only) or Agent mode, with one model picker for all of
+  them; commit messages written from the diff.
 - **Remote folders:** open folders over **SSH** or in **WSL**; the extension host
   then runs on the remote machine, next to the code.
 - **Workspace Trust**, multiple windows, session restore, a Windows jump list with

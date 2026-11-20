@@ -11,6 +11,7 @@ import { hasWorkspaceSymbolProviders, searchWorkspaceSymbols, type WorkspaceSymb
 const relativePath = (path: string, root: string) => (isWithin(path, root) && path !== root ? path.slice(root.length + 1) : path);
 import { useWorkspace } from "../state/workspace";
 import { FileIcon } from "./FileIcon";
+import { fuzzyMatch, searchFiles, type FileMatch } from "../search/fileMatch";
 
 const INPUT_ID = "file-search";
 const MAX_RESULTS = 50;
@@ -66,62 +67,6 @@ function searchCommands(query: string): CommandMatch[] {
       return match ? [{ command, indices: match.indices, recent: recent.includes(command.id), score: match.score }] : [];
     })
     .sort((a, b) => b.score - a.score);
-}
-
-interface Match {
-  relative: string;
-  name: string;
-  dir: string;
-  score: number;
-  /** Matched character positions within `name`, or within `relative` for path queries. */
-  indices: number[];
-}
-
-/** Case-insensitive fuzzy match favouring substrings, prefixes and word starts. */
-function fuzzyMatch(query: string, target: string): { score: number; indices: number[] } | null {
-  const q = query.toLowerCase();
-  const t = target.toLowerCase();
-
-  const substring = t.indexOf(q);
-  if (substring >= 0) {
-    return {
-      score: 100 + (substring === 0 ? 50 : 0) - t.length * 0.1,
-      indices: Array.from({ length: q.length }, (_, i) => substring + i),
-    };
-  }
-
-  const indices: number[] = [];
-  let score = 0;
-  let from = 0;
-  for (const ch of q) {
-    const i = t.indexOf(ch, from);
-    if (i < 0) return null;
-    const wordStart = i === 0 || /[\\/._\-\s]/.test(t[i - 1]) || target[i] !== t[i];
-    const consecutive = indices.length > 0 && i === indices[indices.length - 1] + 1;
-    score += (consecutive ? 5 : 1) + (wordStart ? 3 : 0);
-    indices.push(i);
-    from = i + 1;
-  }
-  return { score: score - t.length * 0.1, indices };
-}
-
-function search(files: string[], query: string): Match[] {
-  const byPath = /[\\/]/.test(query);
-  const matches: Match[] = [];
-  for (const relative of files) {
-    const name = basename(relative);
-    const match = fuzzyMatch(query, byPath ? relative : name);
-    if (!match) continue;
-    matches.push({
-      relative,
-      name,
-      dir: relative.slice(0, relative.length - name.length).replace(/[\\/]$/, ""),
-      ...match,
-    });
-  }
-  return matches
-    .sort((a, b) => b.score - a.score || a.relative.length - b.relative.length)
-    .slice(0, MAX_RESULTS);
 }
 
 function Highlighted({ text, indices, offset = 0 }: { text: string; indices: Set<number>; offset?: number }) {
@@ -224,7 +169,7 @@ export function FileSearch() {
   }, [symbolMode, query]);
 
   const results = useMemo(
-    () => (!commandMode && !symbolMode && files && query.trim() ? search(files, query.trim()) : []),
+    () => (!commandMode && !symbolMode && files && query.trim() ? searchFiles(files, query.trim()) : []),
     [commandMode, symbolMode, files, query],
   );
   const count = commandMode ? commands.length : symbolMode ? (symbols?.length ?? 0) : results.length;
@@ -243,7 +188,7 @@ export function FileSearch() {
     (document.activeElement as HTMLElement | null)?.blur();
   };
 
-  const choose = (match: Match | undefined) => {
+  const choose = (match: FileMatch | undefined) => {
     if (!match || !root) return;
     openEditor(joinPath(root, match.relative));
     dismiss();
