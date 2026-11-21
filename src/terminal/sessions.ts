@@ -315,6 +315,9 @@ export class TerminalSession {
       this.startListeners.forEach((listener) => listener(null));
       return;
     }
+    this.term.onResize(({ cols, rows }) => {
+      if (this.ptyId !== null) void terminalApi.resize(this.ptyId, cols, rows);
+    });
     try {
       const spawned = await terminalApi.spawn(
         this.cwd,
@@ -334,6 +337,9 @@ export class TerminalSession {
         return;
       }
       this.ptyId = spawned.id;
+      // Fitting the panel can happen while spawn is pending, before a PTY id
+      // exists. Replay the current size so the shell never keeps that stale size.
+      await terminalApi.resize(spawned.id, this.term.cols, this.term.rows);
       this.pid = spawned.pid;
       this.startListeners.forEach((listener) => listener(spawned.pid));
       this.term.write("\x1b[90mTip: Start with \x1b[38;2;207;142;109m>\x1b[90m to ask AI for a command suggestion\x1b[0m\r\n");
@@ -349,9 +355,6 @@ export class TerminalSession {
       void terminalApi.write(this.ptyId, this.queued);
       this.queued = "";
     }
-    this.term.onResize(({ cols, rows }) => {
-      if (this.ptyId !== null) void terminalApi.resize(this.ptyId, cols, rows);
-    });
   }
 
   private handleTerminalData(data: string) {
