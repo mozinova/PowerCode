@@ -36,7 +36,7 @@ import { openSettings } from "../actions";
 import { openToolDocument } from "../ai/toolDocument";
 import { aiApi, type AiModel, type AiProvider } from "../lib/ipc";
 import { basename } from "../lib/paths";
-import { remoteOf } from "../lib/remote";
+import { remoteLabel, remoteOf } from "../lib/remote";
 import { searchFiles, type FileMatch } from "../search/fileMatch";
 import { notify } from "../state/notifications";
 import { showTrustDialog, useTrust } from "../state/trust";
@@ -529,8 +529,11 @@ function HistoryList({ onOpen }: { onOpen: () => void }) {
 }
 
 function Empty() {
+  const root = useWorkspace((s) => s.root);
+  const remote = remoteOf(root);
   const detecting = useAi((s) => s.detecting);
   const detected = useAi((s) => s.detected);
+  const detectionError = useAi((s) => s.detectionError);
   const providers = useAi((s) => s.providers);
   if (!detected || detecting) {
     return (
@@ -543,8 +546,7 @@ function Empty() {
     return (
       <div className="flex flex-col gap-2 px-3 py-2 text-fg-muted">
         <p>
-          No AI assistant was found. Install {Object.values(AI_PROVIDER_NAMES).join(", ")} (their command-line programs), or set the
-          path of one in the settings.
+          {detectionError || `No AI assistant was found on the project's host. Install ${Object.values(AI_PROVIDER_NAMES).join(", ")} (their command-line programs), or set an executable path for that host in Settings.`}
         </p>
         <div className="flex gap-2">
           <button type="button" onClick={() => void detectAiProviders(true)} className="flex h-7 items-center gap-1.5 rounded-md border border-input-border px-2.5 hover:bg-hover">
@@ -561,7 +563,7 @@ function Empty() {
     <div className="flex flex-col gap-1.5 px-3 py-2 text-fg-muted">
       <p>Ask about the project, or switch to Agent to let the assistant change files and run commands.</p>
       <p className="text-xs text-fg-subtle">
-        Type @ to mention a file, / for commands. Found:{" "}
+        Type @ to mention a file, / for commands. Found{remote ? ` on ${remoteLabel(remote)}` : " locally"}:{" "}
         {providers.map((p) => `${p.name}${p.version ? ` ${p.version}` : ""}${p.bundled ? " (from its extension)" : ""}`).join(", ")}.
       </p>
     </div>
@@ -803,15 +805,13 @@ export function AiView() {
     </ToolWindowHeader>
   );
 
-  if (!root || remoteOf(root) || trust !== "trusted") {
+  if (!root || trust !== "trusted") {
     return (
       <div className="flex h-full flex-col">
         {header}
         <div className="flex flex-col gap-2 px-3 text-fg-muted">
           {!root ? (
             <p>Open a folder: the assistant works in the project's folder.</p>
-          ) : remoteOf(root) ? (
-            <p>AI assistants run on local folders only for now.</p>
           ) : (
             <>
               <p>AI assistants are off in Restricted Mode: they read the project's own instructions and settings, and can run its commands.</p>

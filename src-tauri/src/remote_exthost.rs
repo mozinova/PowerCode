@@ -54,7 +54,7 @@ fn no_window(cmd: &mut Command) {
 }
 
 /// A command running POSIX `script` on the target (through `sh`, whatever the login shell).
-fn script_command(target: &RemoteTarget, script: &str) -> Command {
+pub(crate) fn script_command(target: &RemoteTarget, script: &str) -> Command {
     match target {
         RemoteTarget::Ssh { host } => {
             let mut cmd = Command::new("ssh");

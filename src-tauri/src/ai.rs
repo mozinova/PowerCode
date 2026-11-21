@@ -20,6 +20,8 @@ use tauri::{ipc::Channel, AppHandle, Manager, State};
 
 use crate::error::{err, CmdResult};
 
+mod remote;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
     Claude,
@@ -165,8 +167,13 @@ fn program_command(path: &Path) -> Command {
 
 /// Runs `path args` and returns its stdout, giving up after `timeout`.
 fn output_within(path: &Path, args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = program_command(path)
-        .args(args)
+    let mut command = program_command(path);
+    command.args(args);
+    output_command_within(command, timeout)
+}
+
+fn output_command_within(mut command: Command, timeout: Duration) -> Option<String> {
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -181,8 +188,7 @@ fn output_within(path: &Path, args: &[&str], timeout: Duration) -> Option<String
     });
     match receive.recv_timeout(timeout) {
         Ok(text) => {
-            let _ = child.wait();
-            Some(text)
+            child.wait().ok()?.success().then_some(text)
         }
         Err(_) => {
             let _ = child.kill();
@@ -217,10 +223,13 @@ fn detect_one(kind: Kind, configured: Option<String>, dirs: &[PathBuf], extensio
 
 /// The AI programs found; `paths` are the ones the user set (by provider id), which win.
 #[tauri::command(async)]
-pub fn ai_detect(app: AppHandle, paths: HashMap<String, String>) -> Vec<AiProvider> {
+pub fn ai_detect(app: AppHandle, paths: HashMap<String, String>, cwd: Option<String>) -> CmdResult<Vec<AiProvider>> {
+    if let Some(remote) = cwd.as_deref().and_then(remote::Workspace::parse) {
+        return remote.detect(&paths);
+    }
     let dirs = search_dirs();
     let extensions = app.path().app_data_dir().ok().map(|d| d.join("extensions"));
-    std::thread::scope(|scope| {
+    Ok(std::thread::scope(|scope| {
         let handles: Vec<_> = KINDS
             .into_iter()
             .map(|kind| {
@@ -229,7 +238,7 @@ pub fn ai_detect(app: AppHandle, paths: HashMap<String, String>) -> Vec<AiProvid
             })
             .collect();
         handles.into_iter().filter_map(|h| h.join().ok().flatten()).collect()
-    })
+    }))
 }
 
 // ---- Models ------------------------------------------------------------------------
@@ -312,9 +321,14 @@ fn split_effort(model: &str) -> Option<(&str, &str)> {
 }
 
 #[tauri::command(async)]
-pub fn ai_models(provider: String, path: String) -> CmdResult<Vec<AiModel>> {
+pub fn ai_models(provider: String, path: String, cwd: Option<String>) -> CmdResult<Vec<AiModel>> {
+    let kind = Kind::parse(&provider)?;
     let mut models = vec![model("", "Default", Some("The program's own default"))];
-    models.extend(match Kind::parse(&provider)? {
+    if let Some(remote) = cwd.as_deref().and_then(remote::Workspace::parse) {
+        models.extend(remote.models(kind, &path)?);
+        return Ok(models);
+    }
+    models.extend(match kind {
         Kind::Claude => claude_models(),
         Kind::Codex => {
             let dir = std::env::var_os("CODEX_HOME").map(PathBuf::from).or_else(|| home().map(|h| h.join(".codex")));
@@ -922,7 +936,27 @@ impl Parser {
 #[derive(Default)]
 pub struct AiRuns {
     next: AtomicU32,
-    running: Mutex<HashMap<u32, (u32, Arc<std::sync::atomic::AtomicBool>)>>,
+    running: Mutex<HashMap<u32, Running>>,
+}
+
+#[derive(Clone)]
+struct Running {
+    pid: u32,
+    stopped: Arc<std::sync::atomic::AtomicBool>,
+    remote: Option<remote::Workspace>,
+    remote_pid: Arc<Mutex<Option<u32>>>,
+}
+
+impl Running {
+    fn cancel(&self) {
+        if let Some(remote) = &self.remote {
+            let pid = *self.remote_pid.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(pid) = pid { remote.cancel(pid); }
+            // If startup has not reported its PID yet, the reader cancels it on arrival.
+        } else {
+            kill_tree(self.pid);
+        }
+    }
 }
 
 /// Ends a process and what it started (npm's `.cmd` shims start node).
@@ -940,7 +974,7 @@ fn kill_tree(pid: u32) {
 }
 
 /// Starts a request; its events arrive on `on_event`, ending with `done`. Returns the run id.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn ai_run(runs: State<'_, Arc<AiRuns>>, request: AiRequest, on_event: Channel<AiEvent>) -> CmdResult<u32> {
     start(runs.inner().clone(), request, move |event| {
         let _ = on_event.send(event);
@@ -948,18 +982,19 @@ pub fn ai_run(runs: State<'_, Arc<AiRuns>>, request: AiRequest, on_event: Channe
 }
 
 /// Starts the program for `request`; `send` gets its events, `done` last.
-fn start(runs: Arc<AiRuns>, request: AiRequest, send: impl Fn(AiEvent) + Send + 'static) -> CmdResult<u32> {
+fn start(runs: Arc<AiRuns>, mut request: AiRequest, send: impl Fn(AiEvent) + Send + 'static) -> CmdResult<u32> {
     let kind = Kind::parse(&request.provider)?;
-    if crate::remote::parse(&request.cwd).is_some() || crate::wsl::parse_share(&request.cwd).is_some() {
-        return Err("AI assistants run on local folders only for now.".into());
-    }
-    let mut command = program_command(Path::new(&request.path));
+    let remote = remote::Workspace::parse(&request.cwd);
+    let attachments_dir = remote.as_ref().map(|r| r.prepare(&mut request)).transpose()?.flatten();
+    let mut command = if let Some(remote) = &remote {
+        remote.run_command(kind, &request)
+    } else {
+        let mut cmd = program_command(Path::new(&request.path));
+        // OpenCode reads PWD before the process's own working directory.
+        cmd.args(arguments(kind, &request)).current_dir(&request.cwd).env("PWD", &request.cwd);
+        cmd
+    };
     command
-        .args(arguments(kind, &request))
-        .current_dir(&request.cwd)
-        // Programs that read `PWD` (OpenCode) would otherwise get the folder PowerCode was
-        // started from, e.g. the terminal's in a `tauri dev` run.
-        .env("PWD", &request.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -970,10 +1005,17 @@ fn start(runs: Arc<AiRuns>, request: AiRequest, send: impl Fn(AiEvent) + Send + 
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let mut child = command.spawn().map_err(|e| format!("Could not start {}: {e}", kind.name()))?;
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(e) => {
+            if let (Some(remote), Some(dir)) = (&remote, &attachments_dir) { remote.cleanup(dir); }
+            return Err(format!("Could not start {}: {e}", kind.name()));
+        }
+    };
     let id = runs.next.fetch_add(1, Ordering::Relaxed) + 1;
     let stopped = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    runs.running.lock().map_err(err)?.insert(id, (child.id(), stopped.clone()));
+    let running = Running { pid: child.id(), stopped: stopped.clone(), remote, remote_pid: Arc::new(Mutex::new(None)) };
+    runs.running.lock().map_err(err)?.insert(id, running.clone());
 
     let mut stdin = child.stdin.take().ok_or("No stdin")?;
     let prompt = stdin_payload(kind, &request.prompt);
@@ -992,12 +1034,20 @@ fn start(runs: Arc<AiRuns>, request: AiRequest, send: impl Fn(AiEvent) + Send + 
         let mut parser = Parser::new(kind);
         for line in BufReader::new(stdout).lines() {
             let Ok(line) = line else { break };
+            if running.remote.is_some() {
+                if let Some(pid) = line.strip_prefix("__PC_AI_PID__").and_then(|p| p.parse::<u32>().ok()) {
+                    *running.remote_pid.lock().unwrap_or_else(|e| e.into_inner()) = Some(pid);
+                    if stopped.load(Ordering::Relaxed) { running.cancel(); }
+                    continue;
+                }
+            }
             for event in parser.line(&line) {
                 send(event);
             }
         }
         let status = child.wait();
         let stderr = errors.join().unwrap_or_default();
+        if let (Some(remote), Some(dir)) = (&running.remote, &attachments_dir) { remote.cleanup(dir); }
         if let Ok(mut running) = runs.running.lock() {
             running.remove(&id);
         }
@@ -1023,9 +1073,9 @@ fn start(runs: Arc<AiRuns>, request: AiRequest, send: impl Fn(AiEvent) + Send + 
 #[tauri::command]
 pub fn ai_cancel(runs: State<'_, Arc<AiRuns>>, id: u32) {
     let entry = runs.running.lock().ok().and_then(|r| r.get(&id).cloned());
-    if let Some((pid, stopped)) = entry {
-        stopped.store(true, Ordering::Relaxed);
-        std::thread::spawn(move || kill_tree(pid));
+    if let Some(entry) = entry {
+        entry.stopped.store(true, Ordering::Relaxed);
+        std::thread::spawn(move || entry.cancel());
     }
 }
 

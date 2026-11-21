@@ -384,8 +384,8 @@ export type AiEvent =
 
 export const aiApi = {
   /** The AI programs found; `paths` (by provider) are the ones set in the settings. */
-  detect: (paths: Partial<Record<AiProviderId, string>>) => invoke<AiProvider[]>("ai_detect", { paths }),
-  models: (provider: AiProviderId, path: string) => invoke<AiModel[]>("ai_models", { provider, path }),
+  detect: (paths: Partial<Record<AiProviderId, string>>, cwd: string | null = null) => invoke<AiProvider[]>("ai_detect", { paths, cwd }),
+  models: (provider: AiProviderId, path: string, cwd: string | null = null) => invoke<AiModel[]>("ai_models", { provider, path, cwd }),
   /** Starts a request; returns its id (for `cancel`). Events end with `done`. */
   run: (request: AiRequest, onEvent: (event: AiEvent) => void) => {
     const channel = new Channel<AiEvent>();

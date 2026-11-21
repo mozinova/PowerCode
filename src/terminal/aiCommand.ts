@@ -1,14 +1,18 @@
 //! Prompts and cleaning for natural language terminal commands.
 
+import { linuxPath, remoteOf } from "../lib/remote";
+
 export function terminalCommandPrompt(query: string, cwd: string | null, profile: string | null): string {
   const isWin = typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
   const isMac = typeof navigator !== "undefined" && navigator.userAgent.includes("Mac");
-  const osName = isWin ? "Windows" : isMac ? "macOS" : "Linux";
-  const shellName = profile || (isWin ? "PowerShell" : "bash");
+  const remote = remoteOf(cwd);
+  const osName = remote?.kind === "wsl" ? "Linux (WSL)" : remote ? "the remote host (use POSIX shell syntax)" : isWin ? "Windows" : isMac ? "macOS" : "Linux";
+  const shellName = remote ? "the remote user's shell" : profile || (isWin ? "PowerShell" : "bash");
+  const directory = remote && cwd ? linuxPath(remote, cwd) : cwd;
 
   return [
     `You are a CLI command generator. Translate the user's natural language request into a single terminal command for ${osName} (${shellName}).`,
-    cwd ? `Working directory: ${cwd}` : "",
+    directory ? `Working directory: ${directory}` : "",
     `User request: "${query}"`,
     "",
     "Rules:",

@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
-import { cleanTerminalCommand } from "../../src/terminal/aiCommand";
+import { cleanTerminalCommand, terminalCommandPrompt } from "../../src/terminal/aiCommand";
+
+test("remote command suggestions use the host directory and shell", () => {
+  const wsl = terminalCommandPrompt("list files", "\\\\wsl.localhost\\Ubuntu\\home\\me", "PowerShell");
+  expect(wsl).toContain("Linux (WSL)");
+  expect(wsl).toContain("Working directory: /home/me");
+  expect(wsl).not.toContain("PowerShell");
+  const ssh = terminalCommandPrompt("list files", "ssh://build/var/project", null);
+  expect(ssh).toContain("POSIX shell syntax");
+  expect(ssh).toContain("Working directory: /var/project");
+});
 
 describe("cleanTerminalCommand", () => {
   test("plain command stays unchanged", () => {

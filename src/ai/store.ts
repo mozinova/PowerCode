@@ -61,6 +61,7 @@ interface AiState {
   /** Detection ran at least once. */
   detected: boolean;
   detecting: boolean;
+  detectionError: string | null;
   models: Partial<Record<AiProviderId, AiModel[]>>;
   turns: AiTurn[];
   /**
@@ -110,6 +111,7 @@ export const useAi = create<AiState>(() => ({
   providers: [],
   detected: false,
   detecting: false,
+  detectionError: null,
   models: {},
   turns: [],
   sessions: {},
@@ -129,23 +131,31 @@ export const AI_PROVIDER_NAMES: Record<AiProviderId, string> = { claude: "Claude
 // ---- Providers and models -------------------------------------------------------------
 
 let detection: Promise<AiProvider[]> | null = null;
+let detectionRoot: string | null = null;
 
 /** Looks for the AI programs (once; `force` looks again). */
 export function detectAiProviders(force = false): Promise<AiProvider[]> {
-  if (detection && !force) return detection;
-  useAi.setState({ detecting: true });
+  const root = useWorkspace.getState().root;
+  if (detection && detectionRoot === root && !force) return detection;
+  detectionRoot = root;
+  useAi.setState({ detecting: true, detected: false, detectionError: null, providers: [], models: {} });
+  loadingModels.clear();
   const paths = Object.fromEntries(
     AI_PROVIDER_IDS.map((id) => [id, setting(`ai.${id}.path`, "")]).filter(([, path]) => path),
   );
-  detection = aiApi
-    .detect(paths)
-    .catch(() => [])
+  const pending = aiApi
+    .detect(paths, root)
+    .catch((error) => {
+      if (detection === pending && useWorkspace.getState().root === root) useAi.setState({ detectionError: String(error) });
+      return [];
+    })
     .then((providers) => {
       // Models may differ for another program at the same path.
-      useAi.setState({ providers, detected: true, detecting: false, models: {} });
+      if (detection === pending && useWorkspace.getState().root === root) useAi.setState({ providers, detected: true, detecting: false, models: {} });
       return providers;
     });
-  return detection;
+  detection = pending;
+  return pending;
 }
 
 // Looks again when a program's path changes in the settings.
@@ -163,12 +173,16 @@ export function loadAiModels(id: AiProviderId): Promise<AiModel[]> {
   if (pending) return pending;
   const provider = useAi.getState().providers.find((p) => p.id === id);
   if (!provider) return Promise.resolve([]);
+  const root = useWorkspace.getState().root;
+  const detected = detection;
   const load = aiApi
-    .models(id, provider.path)
+    .models(id, provider.path, root)
     .catch(() => [] as AiModel[])
     .then((models) => {
-      useAi.setState((s) => ({ models: { ...s.models, [id]: models } }));
-      loadingModels.delete(id);
+      if (useWorkspace.getState().root === root && detection === detected) {
+        useAi.setState((s) => ({ models: { ...s.models, [id]: models } }));
+      }
+      if (loadingModels.get(id) === load) loadingModels.delete(id);
       return models;
     });
   loadingModels.set(id, load);
@@ -407,6 +421,7 @@ async function attachedFiles(attachments: AiAttachment[]): Promise<{ text: strin
 }
 
 let nextQueued = 1;
+let chatGeneration = 0;
 
 const isBusy = () => {
   const { running, turns } = useAi.getState();
@@ -438,6 +453,14 @@ function drainQueue() {
 }
 
 export async function sendAiPrompt(prompt: string, attachments: AiAttachment[] = []): Promise<void> {
+  const project = useWorkspace.getState().root;
+  const generation = chatGeneration;
+  await detectAiProviders();
+  if (useWorkspace.getState().root !== project || chatGeneration !== generation) return;
+  if (isBusy()) {
+    useAi.setState((s) => ({ queue: [...s.queue, { id: nextQueued++, prompt, attachments }] }));
+    return;
+  }
   const state = useAi.getState();
   if (state.running !== null || (!prompt.trim() && attachments.length === 0)) return;
   const root = useWorkspace.getState().root;
@@ -471,9 +494,11 @@ export async function sendAiPrompt(prompt: string, attachments: AiAttachment[] =
   const full = [transcript(state.turns.slice(session.seen, index)), context?.text, files.text, attached.text, prompt].filter(Boolean).join("\n\n");
   let sessionId = session.id;
   try {
-    const run = await aiApi.run(
+    let run: number | null = null;
+    run = await aiApi.run(
       { provider: provider.id, path: provider.path, model: model || null, prompt: full, cwd: root, agent: state.agent, session: session.id, oneShot: false, attachments: attached.paths },
       (event) => {
+        if (!useAi.getState().turns.some((t) => t.id === id)) return;
         switch (event.kind) {
           case "session":
             sessionId = event.id;
@@ -523,7 +548,9 @@ export async function sendAiPrompt(prompt: string, attachments: AiAttachment[] =
       },
     );
     // `done` may already have arrived.
-    if (!useAi.getState().turns.find((t) => t.id === id)?.done) useAi.setState({ running: run });
+    const current = useAi.getState().turns.find((t) => t.id === id);
+    if (!current) void aiApi.cancel(run);
+    else if (!current.done) useAi.setState({ running: run });
   } catch (e) {
     fail(String(e));
   }
@@ -535,6 +562,7 @@ export function stopAi() {
 }
 
 export function newAiChat() {
+  chatGeneration++;
   stopAi();
   useAi.setState({ turns: [], sessions: {}, usage: {}, running: null, conversationId: null, queue: [] });
 }
@@ -591,6 +619,7 @@ useWorkspace.subscribe((state, previous) => {
   if (state.root === previous.root) return;
   newAiChat();
   useAi.setState({ history: [] });
+  void detectAiProviders(true);
   void refreshAiHistory();
 });
 
