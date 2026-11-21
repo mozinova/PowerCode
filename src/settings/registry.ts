@@ -91,7 +91,7 @@ export const BUILTIN_SECTIONS: SettingsSection[] = [
         key: "workbench.colorTheme",
         group: "Workbench",
         title: "Color Theme",
-        description: "The color theme of the editor. Install more from the Extensions view.",
+        description: "The color theme of the workbench and editor. Install more from the Extensions view.",
         type: "enum",
         default: "powercode-dark",
         binding: {

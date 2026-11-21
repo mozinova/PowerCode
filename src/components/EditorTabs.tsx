@@ -171,9 +171,9 @@ function Tab({
       }}
       className={`group relative flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-md pr-1 pl-2.5 ${
         active && focused
-          ? "bg-[#25324d] text-fg ring-1 ring-accent/70 ring-inset"
+          ? "bg-selected text-fg ring-1 ring-accent/70 ring-inset"
           : active
-            ? "bg-white/6 text-fg"
+            ? "bg-selected-inactive/40 text-fg"
             : "text-fg-muted hover:bg-hover/60 hover:text-fg"
       }`}
     >

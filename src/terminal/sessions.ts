@@ -30,6 +30,67 @@ const THEME: ITheme = {
   brightWhite: "#ffffff",
 };
 
+export function terminalThemeFor(themeId: string): ITheme {
+  if (themeId === "powercode-light") {
+    return {
+      background: "#ffffff",
+      foreground: "#1f2328",
+      cursor: "#1f2328",
+      selectionBackground: "#accef7",
+      black: "#24292f",
+      red: "#cf222e",
+      green: "#116329",
+      yellow: "#4d2d00",
+      blue: "#0969da",
+      magenta: "#8250df",
+      cyan: "#1b7c83",
+      white: "#6e7781",
+      brightBlack: "#57606a",
+      brightRed: "#a40e26",
+      brightGreen: "#1a7f37",
+      brightYellow: "#633c01",
+      brightBlue: "#218bff",
+      brightMagenta: "#a475f9",
+      brightCyan: "#3192aa",
+      brightWhite: "#8c959f",
+    };
+  }
+  if (themeId === "powercode-matrix-cyber") {
+    return {
+      background: "#060f08",
+      foreground: "#a3f7bf",
+      cursor: "#00ff66",
+      selectionBackground: "#0d421e",
+      black: "#060f08",
+      red: "#ff3366",
+      green: "#00ff66",
+      yellow: "#39ff14",
+      blue: "#00e5ff",
+      magenta: "#e040fb",
+      cyan: "#00ffff",
+      white: "#a3f7bf",
+      brightBlack: "#14331b",
+      brightRed: "#ff6699",
+      brightGreen: "#55ffaa",
+      brightYellow: "#80ff00",
+      brightBlue: "#80ffff",
+      brightMagenta: "#ea80fc",
+      brightCyan: "#a7ffeb",
+      brightWhite: "#ffffff",
+    };
+  }
+  return THEME;
+}
+
+let activeTerminalTheme: ITheme = THEME;
+
+export function updateTerminalThemes(themeId: string) {
+  activeTerminalTheme = terminalThemeFor(themeId);
+  for (const session of useTerminals.getState().sessions) {
+    session.setTheme(activeTerminalTheme);
+  }
+}
+
 let nextKey = 1;
 
 const TERMINAL_FONT = '"JetBrains Mono", "Cascadia Mono", Consolas, Menlo, monospace';
@@ -65,14 +126,14 @@ export class TerminalSession {
   readonly key = nextKey++;
   readonly title: string;
   /** Background of this terminal, which the tab bar takes so they read as one surface. */
-  readonly background = THEME.background!;
+  background = activeTerminalTheme.background!;
   /** The shell's or program's process id, once started. */
   pid: number | null = null;
   /** Set when the process exited: its code, or null when unknown. */
   exit: { code: number | null } | null = null;
   private readonly host = document.createElement("div");
   private readonly term = new Terminal({
-    theme: THEME,
+    theme: activeTerminalTheme,
     fontFamily: terminalFont().family,
     fontSize: terminalFont().size,
     cursorBlink: true,
@@ -280,6 +341,11 @@ export class TerminalSession {
     });
   }
 
+  setTheme(theme: ITheme) {
+    this.background = theme.background!;
+    this.term.options.theme = theme;
+  }
+
   dispose() {
     this.disposed = true;
     if (this.ptyId !== null) void terminalApi.kill(this.ptyId);
@@ -367,6 +433,10 @@ export function closeAllTerminals() {
 
 /** The terminal background, for chrome shown before any session exists. */
 export const TERMINAL_BACKGROUND = THEME.background!;
+
+export function currentTerminalBackground(): string {
+  return activeTerminalTheme.background!;
+}
 
 /** Opens a terminal running `program` (not a shell), e.g. for a debugger's `runInTerminal`. */
 export function newProgramTerminal(cwd: string | null, title: string, program: TerminalProgram) {

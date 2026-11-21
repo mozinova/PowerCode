@@ -105,7 +105,7 @@ export function TooltipLayer() {
       ref={ref}
       role="tooltip"
       style={position ?? { left: 0, top: 0, visibility: "hidden" }}
-      className="pointer-events-none fixed z-[100] flex items-center gap-3 rounded-md border border-line-soft bg-[#393b40] px-2 py-1 text-xs whitespace-nowrap text-fg shadow-lg shadow-black/40"
+      className="pointer-events-none fixed z-[100] flex items-center gap-3 rounded-md border border-line-soft bg-panel px-2 py-1 text-xs whitespace-nowrap text-fg shadow-lg shadow-black/40"
     >
       <span>{tip.text}</span>
       {tip.shortcut && <span className="text-fg-muted">{tip.shortcut}</span>}

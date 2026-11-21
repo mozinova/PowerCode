@@ -6,7 +6,16 @@ import { parse as parseJsonc } from "jsonc-parser";
 import { create } from "zustand";
 import { monaco } from "../editor/monaco";
 import { attachGrammar, registerGrammar } from "../editor/textmate";
-import { POWERCODE_DARK, applyEditorTheme, type EditorTheme } from "../editor/themes";
+import {
+  POWERCODE_DARK,
+  POWERCODE_LIGHT,
+  POWERCODE_MATRIX,
+  applyAppTheme,
+  applyEditorTheme,
+  type EditorTheme,
+} from "../editor/themes";
+import { updateTerminalThemes } from "../terminal/sessions";
+import { useUserSettings } from "../settings/store";
 import { forgetRemovedExtensions } from "../editor/builtinLanguages";
 import { joinPath } from "../lib/paths";
 import { track } from "../state/activity";
@@ -32,11 +41,23 @@ export interface ThemeOption {
   load: () => Promise<EditorTheme>;
 }
 
-const BUILTIN_THEME: ThemeOption = {
-  id: POWERCODE_DARK.id,
-  label: POWERCODE_DARK.label,
-  load: async () => POWERCODE_DARK,
-};
+export const BUILTIN_THEMES: ThemeOption[] = [
+  {
+    id: POWERCODE_DARK.id,
+    label: POWERCODE_DARK.label,
+    load: async () => POWERCODE_DARK,
+  },
+  {
+    id: POWERCODE_LIGHT.id,
+    label: POWERCODE_LIGHT.label,
+    load: async () => POWERCODE_LIGHT,
+  },
+  {
+    id: POWERCODE_MATRIX.id,
+    label: POWERCODE_MATRIX.label,
+    load: async () => POWERCODE_MATRIX,
+  },
+];
 
 /** Download progress of an install; `downloaded === total` means it is being unpacked. */
 export type InstallProgress = DownloadProgress;
@@ -61,8 +82,8 @@ interface ExtensionsState {
 export const useExtensions = create<ExtensionsState>(() => ({
   installed: [],
   disabled: [],
-  themes: [BUILTIN_THEME],
-  activeThemeId: BUILTIN_THEME.id,
+  themes: [...BUILTIN_THEMES],
+  activeThemeId: BUILTIN_THEMES[0].id,
   installing: {},
   updates: {},
   wrongPlatform: {},
@@ -332,14 +353,16 @@ function deactivate(id: string) {
 function setInstalled(installed: InstalledExtension[]) {
   useExtensions.setState({
     installed,
-    themes: [BUILTIN_THEME, ...installed.flatMap(themeOptions)],
+    themes: [...BUILTIN_THEMES, ...installed.flatMap(themeOptions)],
   });
   setIconThemeOptions(installed);
 }
 
 export async function setEditorTheme(id: string) {
-  const option = useExtensions.getState().themes.find((t) => t.id === id) ?? BUILTIN_THEME;
-  await applyEditorTheme(await option.load());
+  const option = useExtensions.getState().themes.find((t) => t.id === id) ?? BUILTIN_THEMES[0];
+  const theme = await option.load();
+  await applyEditorTheme(theme);
+  updateTerminalThemes(option.id);
   useExtensions.setState({ activeThemeId: option.id });
   try {
     localStorage.setItem(THEME_STORAGE_KEY, option.id);
@@ -350,11 +373,16 @@ export async function setEditorTheme(id: string) {
 
 function storedThemeId(): string {
   try {
-    return localStorage.getItem(THEME_STORAGE_KEY) ?? BUILTIN_THEME.id;
+    const fromSettings = useUserSettings.getState().values["workbench.colorTheme"];
+    if (typeof fromSettings === "string" && fromSettings) return fromSettings;
+    return localStorage.getItem(THEME_STORAGE_KEY) ?? BUILTIN_THEMES[0].id;
   } catch {
-    return BUILTIN_THEME.id;
+    return BUILTIN_THEMES[0].id;
   }
 }
+
+// Apply the theme to the workbench immediately so the window never flashes the wrong colours.
+applyAppTheme(storedThemeId());
 
 export function initExtensions() {
   return track("Loading extensions…", loadExtensions);
@@ -374,7 +402,7 @@ async function loadExtensions() {
   useExtensions.setState({ disabled: all.filter((ext) => ext.disabled) });
   setInstalled(installed);
   forgetRemovedExtensions(installed.map((e) => e.id));
-  await setEditorTheme(storedThemeId()).catch(() => setEditorTheme(BUILTIN_THEME.id));
+  await setEditorTheme(storedThemeId()).catch(() => setEditorTheme(BUILTIN_THEMES[0].id));
   await setIconTheme(storedIconThemeId()).catch(() => setIconTheme(BUILTIN_ICON_THEME_ID));
   offerMissingDependencies();
   // Imported here, not at the top: builtinExtensions.ts imports this module.
@@ -553,7 +581,7 @@ export async function setExtensionEnabled(id: string, enabled: boolean) {
   await resetIconThemeIfFrom(id);
   useExtensions.setState({ disabled: sortById([...disabled, { ...ext, disabled: true }]) });
   setInstalled(installed.filter((e) => e.id !== id));
-  if (usedActiveTheme) await setEditorTheme(BUILTIN_THEME.id);
+  if (usedActiveTheme) await setEditorTheme(BUILTIN_THEMES[0].id);
 }
 
 /** After an update, themes from the extension are reloaded so their new colours show. */
@@ -644,7 +672,7 @@ export async function uninstallExtension(id: string) {
   await resetIconThemeIfFrom(id);
   useExtensions.setState(({ disabled }) => ({ disabled: disabled.filter((e) => e.id !== id) }));
   setInstalled(installed.filter((e) => e.id !== id));
-  if (removedActiveTheme) await setEditorTheme(BUILTIN_THEME.id);
+  if (removedActiveTheme) await setEditorTheme(BUILTIN_THEMES[0].id);
 }
 
 /** URL of an installed extension's own icon, if it declares one. */

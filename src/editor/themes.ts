@@ -114,6 +114,198 @@ export const POWERCODE_DARK: EditorTheme = {
   ],
 };
 
+/** IntelliJ New UI "Light" editor colour scheme. */
+export const POWERCODE_LIGHT: EditorTheme = {
+  id: "powercode-light",
+  label: "PowerCode Light",
+  base: "vs",
+  colors: {
+    "editor.background": "#FFFFFF",
+    "editor.foreground": "#1F2328",
+    "editorLineNumber.foreground": "#8C959F",
+    "editorLineNumber.activeForeground": "#1F2328",
+    "editor.lineHighlightBackground": "#F6F8FA",
+    "editor.lineHighlightBorder": "#00000000",
+    "editor.selectionBackground": "#ACCEF7",
+    "editor.inactiveSelectionBackground": "#ACCEF780",
+    "editor.wordHighlightBackground": "#EAECEF80",
+    "editor.wordHighlightStrongBackground": "#D0D7DE80",
+    "editor.findMatchBackground": "#FFD33D80",
+    "editor.findMatchHighlightBackground": "#FFE57F60",
+    "editorCursor.foreground": "#1F2328",
+    "editorWhitespace.foreground": "#D0D7DE",
+    "editorIndentGuide.background1": "#EAECEF",
+    "editorIndentGuide.activeBackground1": "#AFB8C1",
+    "editorBracketMatch.background": "#D0D7DE",
+    "editorBracketMatch.border": "#00000000",
+    "editorGutter.background": "#FFFFFF",
+    "editorWidget.background": "#F7F8FA",
+    "editorWidget.border": "#D3D5DB",
+    "editorHoverWidget.background": "#F7F8FA",
+    "editorHoverWidget.border": "#D3D5DB",
+    "editorSuggestWidget.background": "#F7F8FA",
+    "editorSuggestWidget.border": "#D3D5DB",
+    "editorSuggestWidget.selectedBackground": "#D4E2FF",
+    "editorSuggestWidget.highlightForeground": "#0969DA",
+    "list.hoverBackground": "#E4E6EB",
+    "input.background": "#FFFFFF",
+    "input.border": "#D0D7DE",
+    "focusBorder": "#0969DA",
+    "scrollbarSlider.background": "#8C959F40",
+    "scrollbarSlider.hoverBackground": "#8C959F70",
+    "scrollbarSlider.activeBackground": "#8C959F90",
+    "minimap.background": "#FFFFFF",
+  },
+  tokenColors: [
+    { settings: { foreground: "#1F2328", background: "#FFFFFF" } },
+    { scope: ["comment", "punctuation.definition.comment"], settings: { foreground: "#6E7781" } },
+    {
+      scope: ["comment.block.documentation", "comment.block.javadoc"],
+      settings: { foreground: "#3F6E50", fontStyle: "italic" },
+    },
+    {
+      scope: [
+        "keyword",
+        "storage.type",
+        "storage.modifier",
+        "support.type.primitive",
+        "constant.language",
+        "variable.language.this",
+        "variable.language.self",
+        "variable.language.super",
+        "keyword.operator.new",
+        "keyword.operator.expression",
+      ],
+      settings: { foreground: "#CF222E" },
+    },
+    { scope: ["keyword.operator", "punctuation"], settings: { foreground: "#24292F" } },
+    { scope: ["string", "punctuation.definition.string"], settings: { foreground: "#0A3069" } },
+    { scope: ["constant.character.escape", "string.regexp"], settings: { foreground: "#116329" } },
+    { scope: ["constant.numeric"], settings: { foreground: "#0550AE" } },
+    { scope: ["entity.name.function"], settings: { foreground: "#8250DF" } },
+    {
+      scope: [
+        "variable.other.property",
+        "variable.other.object.property",
+        "support.variable.property",
+        "meta.object-literal.key",
+        "support.type.property-name",
+        "variable.other.constant",
+      ],
+      settings: { foreground: "#953800" },
+    },
+    { scope: ["entity.name.type", "entity.name.class", "support.class"], settings: { foreground: "#0550AE" } },
+    {
+      scope: ["meta.decorator", "punctuation.decorator", "storage.type.annotation"],
+      settings: { foreground: "#8250DF" },
+    },
+    { scope: ["entity.name.tag"], settings: { foreground: "#116329" } },
+    { scope: ["entity.other.attribute-name"], settings: { foreground: "#0550AE" } },
+    { scope: ["markup.heading"], settings: { foreground: "#0550AE", fontStyle: "bold" } },
+    { scope: ["markup.bold"], settings: { fontStyle: "bold" } },
+    { scope: ["markup.italic"], settings: { fontStyle: "italic" } },
+    { scope: ["markup.inline.raw", "markup.fenced_code"], settings: { foreground: "#0A3069" } },
+    { scope: ["markup.underline.link"], settings: { foreground: "#0969DA", fontStyle: "underline" } },
+    { scope: ["invalid"], settings: { foreground: "#CF222E" } },
+  ],
+};
+
+/** Matrix Cyber cyberpunk phosphor green/cyan editor colour scheme. */
+export const POWERCODE_MATRIX: EditorTheme = {
+  id: "powercode-matrix-cyber",
+  label: "PowerCode Matrix Cyber",
+  base: "vs-dark",
+  colors: {
+    "editor.background": "#060F08",
+    "editor.foreground": "#A3F7BF",
+    "editorLineNumber.foreground": "#1D4726",
+    "editorLineNumber.activeForeground": "#00FF66",
+    "editor.lineHighlightBackground": "#0A1F10",
+    "editor.lineHighlightBorder": "#00000000",
+    "editor.selectionBackground": "#0D421E",
+    "editor.inactiveSelectionBackground": "#0D421E80",
+    "editor.wordHighlightBackground": "#143D1F",
+    "editor.wordHighlightStrongBackground": "#1B4F2A",
+    "editor.findMatchBackground": "#00FF6640",
+    "editor.findMatchHighlightBackground": "#00FF6625",
+    "editorCursor.foreground": "#00FF66",
+    "editorWhitespace.foreground": "#1D472650",
+    "editorIndentGuide.background1": "#0E2914",
+    "editorIndentGuide.activeBackground1": "#1D4726",
+    "editorBracketMatch.background": "#0D421E",
+    "editorBracketMatch.border": "#00FF6680",
+    "editorGutter.background": "#060F08",
+    "editorWidget.background": "#0A170D",
+    "editorWidget.border": "#14331B",
+    "editorHoverWidget.background": "#0A170D",
+    "editorHoverWidget.border": "#14331B",
+    "editorSuggestWidget.background": "#0A170D",
+    "editorSuggestWidget.border": "#14331B",
+    "editorSuggestWidget.selectedBackground": "#0D421E",
+    "editorSuggestWidget.highlightForeground": "#00FF66",
+    "list.hoverBackground": "#102D18",
+    "input.background": "#040D06",
+    "input.border": "#185227",
+    "focusBorder": "#00FF66",
+    "scrollbarSlider.background": "#18522780",
+    "scrollbarSlider.hoverBackground": "#2F6B4280",
+    "scrollbarSlider.activeBackground": "#2F6B42",
+    "minimap.background": "#060F08",
+  },
+  tokenColors: [
+    { settings: { foreground: "#A3F7BF", background: "#060F08" } },
+    { scope: ["comment", "punctuation.definition.comment"], settings: { foreground: "#2E7D46" } },
+    {
+      scope: ["comment.block.documentation", "comment.block.javadoc"],
+      settings: { foreground: "#399955", fontStyle: "italic" },
+    },
+    {
+      scope: [
+        "keyword",
+        "storage.type",
+        "storage.modifier",
+        "support.type.primitive",
+        "constant.language",
+        "variable.language.this",
+        "variable.language.self",
+        "variable.language.super",
+        "keyword.operator.new",
+        "keyword.operator.expression",
+      ],
+      settings: { foreground: "#00FF66" },
+    },
+    { scope: ["keyword.operator", "punctuation"], settings: { foreground: "#6EE7A8" } },
+    { scope: ["string", "punctuation.definition.string"], settings: { foreground: "#80FFB0" } },
+    { scope: ["constant.character.escape", "string.regexp"], settings: { foreground: "#00E5FF" } },
+    { scope: ["constant.numeric"], settings: { foreground: "#39FF14" } },
+    { scope: ["entity.name.function"], settings: { foreground: "#00E5FF" } },
+    {
+      scope: [
+        "variable.other.property",
+        "variable.other.object.property",
+        "support.variable.property",
+        "meta.object-literal.key",
+        "support.type.property-name",
+        "variable.other.constant",
+      ],
+      settings: { foreground: "#00FFFF" },
+    },
+    { scope: ["entity.name.type", "entity.name.class", "support.class"], settings: { foreground: "#38EF7D" } },
+    {
+      scope: ["meta.decorator", "punctuation.decorator", "storage.type.annotation"],
+      settings: { foreground: "#E040FB" },
+    },
+    { scope: ["entity.name.tag"], settings: { foreground: "#00FF66" } },
+    { scope: ["entity.other.attribute-name"], settings: { foreground: "#00E5FF" } },
+    { scope: ["markup.heading"], settings: { foreground: "#00FF66", fontStyle: "bold" } },
+    { scope: ["markup.bold"], settings: { fontStyle: "bold" } },
+    { scope: ["markup.italic"], settings: { fontStyle: "italic" } },
+    { scope: ["markup.inline.raw", "markup.fenced_code"], settings: { foreground: "#80FFB0" } },
+    { scope: ["markup.underline.link"], settings: { foreground: "#00E5FF", fontStyle: "underline" } },
+    { scope: ["invalid"], settings: { foreground: "#FF3366" } },
+  ],
+};
+
 /**
  * Monaco's built-in Monarch tokenizers emit their own token names; each maps to
  * the first TextMate scope (in order of preference) that the theme colours.
@@ -204,8 +396,22 @@ export function activeThemeColors(): Record<string, string> {
   return activeColors;
 }
 
+/** Applies the app's CSS variables on `<html data-theme="...">` to match `themeId` and `base`. */
+export function applyAppTheme(themeId: string, base: monaco.editor.BuiltinTheme = "vs-dark") {
+  let appTheme = "powercode-dark";
+  if (themeId === "powercode-light" || themeId === "powercode-matrix-cyber" || themeId === "powercode-dark") {
+    appTheme = themeId;
+  } else if (base === "vs" || base === "hc-light") {
+    appTheme = "powercode-light";
+  }
+  if (typeof document !== "undefined") {
+    document.documentElement.setAttribute("data-theme", appTheme);
+  }
+}
+
 /** Defines `theme` synchronously so editors can be created with it right away. */
 export function defineEditorTheme(theme: EditorTheme) {
+  applyAppTheme(theme.id, theme.base);
   defineMonacoTheme(theme, []);
   activeColors = theme.colors;
   activeBase = theme.base;
@@ -213,14 +419,19 @@ export function defineEditorTheme(theme: EditorTheme) {
 
 /** Makes `theme` the active editor theme for both Monarch and TextMate tokens. */
 export async function applyEditorTheme(theme: EditorTheme) {
+  applyAppTheme(theme.id, theme.base);
   activeColors = theme.colors;
   activeBase = theme.base;
   defineMonacoTheme(theme, []);
   monaco.editor.setTheme(theme.id);
+  const isBuiltin =
+    theme.id === POWERCODE_DARK.id ||
+    theme.id === POWERCODE_LIGHT.id ||
+    theme.id === POWERCODE_MATRIX.id;
   const textMateRules = await setTextMateTheme(
     { name: theme.label, settings: theme.tokenColors },
-    // The built-in theme has semantic highlighting on, as VS Code's default themes do.
-    { enabled: theme.semanticHighlighting ?? theme.id === POWERCODE_DARK.id, rules: theme.semanticTokenColors ?? {} },
+    // Built-in themes have semantic highlighting on, as VS Code's default themes do.
+    { enabled: theme.semanticHighlighting ?? isBuiltin, rules: theme.semanticTokenColors ?? {} },
   );
   defineMonacoTheme(theme, textMateRules);
   monaco.editor.setTheme(theme.id);

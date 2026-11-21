@@ -4,11 +4,11 @@ import { remoteOf } from "../lib/remote";
 import { useWorkspace } from "../state/workspace";
 import {
   closeTerminal,
+  currentTerminalBackground,
   loadTerminalProfiles,
   newTerminal,
   setActiveTerminal,
   setDefaultTerminalProfile,
-  TERMINAL_BACKGROUND,
   useTerminals,
 } from "../terminal/sessions";
 import { ContextMenu, DropdownMenu, type MenuEntry } from "./Menu";
@@ -101,7 +101,7 @@ export function TerminalPanel() {
 
   return (
     // One surface: the tab bar takes the active terminal's background, with no border between them.
-    <div className="flex h-full flex-col" style={{ background: active?.background ?? TERMINAL_BACKGROUND }}>
+    <div className="flex h-full flex-col" style={{ background: active?.background ?? currentTerminalBackground() }}>
       <div className="flex h-9 shrink-0 items-center gap-1 pr-2 pl-3">
         <span className="mr-2 font-semibold">Terminal</span>
         <div role="tablist" className="flex min-w-0 items-center gap-0.5 overflow-x-auto">

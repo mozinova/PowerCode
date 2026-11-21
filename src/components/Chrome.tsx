@@ -102,8 +102,8 @@ function WindowButton({
       {...tooltipProps(title)}
       aria-label={title}
       onClick={onClick}
-      className={`flex h-full w-[46px] items-center justify-center text-fg-muted hover:text-white ${
-        danger ? "hover:bg-[#c42b1c]" : "hover:bg-hover"
+      className={`flex h-full w-[46px] items-center justify-center text-fg-muted ${
+        danger ? "hover:bg-[#c42b1c] hover:text-white" : "hover:bg-hover hover:text-fg"
       }`}
     >
       <Icon size={15} strokeWidth={1.5} />

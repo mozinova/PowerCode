@@ -26,6 +26,68 @@
   --font-code: "JetBrains Mono", "Cascadia Code", Consolas, Menlo, monospace;
 }
 
+/* Themes: PowerCode Dark (default), PowerCode Light, PowerCode Matrix Cyber */
+:root,
+[data-theme="powercode-dark"] {
+  --color-frame: #0d0e10;
+  --color-editor: #1e1f22;
+  --color-panel: #2b2d30;
+  --color-line: #1e1f22;
+  --color-line-soft: #393b40;
+  --color-hover: #393b40;
+  --color-selected: #2e436e;
+  --color-selected-inactive: #43454a;
+  --color-fg: #dfe1e5;
+  --color-fg-muted: #868a91;
+  --color-fg-subtle: #6f737a;
+  --color-accent: #3574f0;
+  --color-accent-hover: #4682fa;
+  --color-input: #1e1f22;
+  --color-input-border: #4e5157;
+  --color-danger: #db5c5c;
+  --color-modified: #70aeff;
+}
+
+[data-theme="powercode-light"] {
+  --color-frame: #ebedf0;
+  --color-editor: #ffffff;
+  --color-panel: #f7f8fa;
+  --color-line: #ebedf0;
+  --color-line-soft: #d3d5db;
+  --color-hover: #eaecf0;
+  --color-selected: #d4e2ff;
+  --color-selected-inactive: #e4e6eb;
+  --color-fg: #1f2328;
+  --color-fg-muted: #656d76;
+  --color-fg-subtle: #8c959f;
+  --color-accent: #0969da;
+  --color-accent-hover: #0550ae;
+  --color-input: #ffffff;
+  --color-input-border: #d0d7de;
+  --color-danger: #cf222e;
+  --color-modified: #0969da;
+}
+
+[data-theme="powercode-matrix-cyber"] {
+  --color-frame: #030804;
+  --color-editor: #060f08;
+  --color-panel: #0a170d;
+  --color-line: #060f08;
+  --color-line-soft: #14331b;
+  --color-hover: #102d18;
+  --color-selected: #0d421e;
+  --color-selected-inactive: #14331b;
+  --color-fg: #a3f7bf;
+  --color-fg-muted: #4e9e67;
+  --color-fg-subtle: #2f6b42;
+  --color-accent: #00ff66;
+  --color-accent-hover: #39ff14;
+  --color-input: #040d06;
+  --color-input-border: #185227;
+  --color-danger: #ff3366;
+  --color-modified: #00ffff;
+}
+
 html,
 body,
 #root {
@@ -142,6 +204,28 @@ body {
   box-shadow: 0 0 0 1px rgb(255 255 255 / 0.035);
 }
 
+[data-theme="powercode-light"] .island {
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.08), 0 1px 3px rgb(0 0 0 / 0.04);
+}
+
+[data-theme="powercode-matrix-cyber"] .island {
+  box-shadow: 0 0 0 1px #00ff6633, 0 0 12px #00ff6610;
+}
+
+[data-theme="powercode-light"] ::-webkit-scrollbar-thumb {
+  background: #8c959f40;
+}
+[data-theme="powercode-light"] ::-webkit-scrollbar-thumb:hover {
+  background-color: #8c959f70;
+}
+
+[data-theme="powercode-matrix-cyber"] ::-webkit-scrollbar-thumb {
+  background: #18522780;
+}
+[data-theme="powercode-matrix-cyber"] ::-webkit-scrollbar-thumb:hover {
+  background-color: #2f6b42;
+}
+
 /*
  * The glow behind the title bar and the tool window stripe (IntelliJ's project
  * colour gradient): black over the stripe, then orange-red, then navy blue,
@@ -157,6 +241,30 @@ body {
     rgb(28 46 102 / 0) 62rem
   );
   mask-image: linear-gradient(to bottom, #000 0, #000 2.5rem, transparent 100%);
+}
+
+[data-theme="powercode-light"] .frame-glow {
+  background: linear-gradient(
+    90deg,
+    #ebedf0 0,
+    #ebedf0 3rem,
+    rgb(9 105 218 / 0.15) 14rem,
+    rgb(84 138 247 / 0.12) 34rem,
+    rgb(84 138 247 / 0) 62rem
+  );
+  mask-image: linear-gradient(to bottom, #ebedf0 0, #ebedf0 2.5rem, transparent 100%);
+}
+
+[data-theme="powercode-matrix-cyber"] .frame-glow {
+  background: linear-gradient(
+    90deg,
+    #030804 0,
+    #030804 3rem,
+    rgb(0 255 102 / 0.3) 14rem,
+    rgb(0 255 255 / 0.2) 34rem,
+    rgb(0 255 102 / 0) 62rem
+  );
+  mask-image: linear-gradient(to bottom, #030804 0, #030804 2.5rem, transparent 100%);
 }
 
 /* Rendered READMEs on extension pages, close to GitHub's markdown style. */
