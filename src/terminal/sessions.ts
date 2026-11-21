@@ -161,6 +161,7 @@ export class TerminalSession {
   private queued = "";
   private readonly startListeners = new Set<(pid: number | null) => void>();
   private readonly exitListeners = new Set<(code: number | null) => void>();
+  isGenerating = false;
   private currentLine = "";
   private nlActive = false;
   private nlPrompt = "";
@@ -335,6 +336,7 @@ export class TerminalSession {
       this.ptyId = spawned.id;
       this.pid = spawned.pid;
       this.startListeners.forEach((listener) => listener(spawned.pid));
+      this.term.write("\x1b[90mTip: Start with \x1b[38;2;207;142;109m>\x1b[90m to ask AI for a command suggestion\x1b[0m\r\n");
     } catch (e) {
       this.term.write(`\x1b[31mCould not start the terminal: ${e}\x1b[0m\r\n`);
       this.markExited(null);
@@ -361,6 +363,8 @@ export class TerminalSession {
         this.nlCancel?.();
         this.nlCancel = null;
         this.nlGenerating = false;
+        this.isGenerating = false;
+        useTerminals.setState({ generating: false });
         this.nlActive = false;
         this.nlPrompt = "";
         this.currentLine = "";
@@ -385,7 +389,9 @@ export class TerminalSession {
         }
 
         this.nlGenerating = true;
-        this.term.write("\r\n\x1b[90m⚡ Generating command...\x1b[0m");
+        this.isGenerating = true;
+        useTerminals.setState({ generating: true });
+        this.term.write("\r\n\x1b[90m■ Generating command…\x1b[0m");
 
         const signal = { cancel: () => {} };
         this.nlCancel = () => signal.cancel();
@@ -394,11 +400,13 @@ export class TerminalSession {
           .then((command) => {
             if (!this.nlGenerating) return;
             this.nlGenerating = false;
+            this.isGenerating = false;
+            useTerminals.setState({ generating: false });
             this.nlActive = false;
             this.nlPrompt = "";
             this.currentLine = command;
 
-            // Clear the "⚡ Generating command..." line and move cursor back to query line
+            // Clear the "■ Generating command…" line and move cursor back to query line
             this.term.write("\r\x1b[2K\x1b[A");
 
             // Advance the shell to the next line and feed the suggested command
@@ -414,6 +422,8 @@ export class TerminalSession {
           .catch((err) => {
             if (!this.nlGenerating) return;
             this.nlGenerating = false;
+            this.isGenerating = false;
+            useTerminals.setState({ generating: false });
             this.nlActive = false;
             this.nlPrompt = "";
             this.currentLine = "";
@@ -509,6 +519,11 @@ export class TerminalSession {
     this.disposed = true;
     this.nlCancel?.();
     this.nlCancel = null;
+    if (this.nlGenerating) {
+      this.nlGenerating = false;
+      this.isGenerating = false;
+      useTerminals.setState({ generating: false });
+    }
     if (this.ptyId !== null) void terminalApi.kill(this.ptyId);
     this.term.dispose();
     this.host.remove();
@@ -523,6 +538,7 @@ interface TerminalsState {
   profiles: TerminalProfile[];
   /** Profile used by "+" and Alt+F12; null until profiles load (the backend default). */
   defaultProfile: string | null;
+  generating: boolean;
 }
 
 function storedDefaultProfile(): string | null {
@@ -538,6 +554,7 @@ export const useTerminals = create<TerminalsState>(() => ({
   active: null,
   profiles: [],
   defaultProfile: storedDefaultProfile(),
+  generating: false,
 }));
 
 export async function loadTerminalProfiles() {

@@ -1,4 +1,4 @@
-import { ChevronDown, ClipboardPaste, Copy, Eraser, Minus, Plus, TextSelect, Trash2, X } from "lucide-react";
+import { ChevronDown, ClipboardPaste, Copy, Eraser, Minus, Plus, Sparkles, TextSelect, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { remoteOf } from "../lib/remote";
 import { useWorkspace } from "../state/workspace";
@@ -11,6 +11,7 @@ import {
   setDefaultTerminalProfile,
   useTerminals,
 } from "../terminal/sessions";
+import { DotsSpinner } from "./AiView";
 import { ContextMenu, DropdownMenu, type MenuEntry } from "./Menu";
 import { IconButton } from "./ui";
 import { tooltipProps } from "./Tooltip";
@@ -48,7 +49,7 @@ function NewTerminalButton({ root }: { root: string | null }) {
 }
 
 export function TerminalPanel() {
-  const { sessions, active } = useTerminals();
+  const { sessions, active, generating } = useTerminals();
   const root = useWorkspace((s) => s.root);
   const toggleBottomTool = useWorkspace((s) => s.toggleBottomTool);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -139,17 +140,37 @@ export function TerminalPanel() {
         </div>
         <NewTerminalButton root={root} />
         <div className="flex-1" />
+        {generating ? (
+          <div className="mr-2.5 flex items-center gap-2 rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1 text-xs font-medium text-accent">
+            <DotsSpinner size={12} />
+            <span>Generating command…</span>
+          </div>
+        ) : (
+          <div className="mr-2.5 hidden items-center gap-1.5 text-xs text-fg-subtle select-none sm:flex">
+            <Sparkles size={12} className="text-accent/80" />
+            <span>Type</span>
+            <kbd className="rounded border border-line-soft bg-input px-1.5 py-0.5 font-mono text-[11px] font-semibold text-accent">&gt;</kbd>
+            <span>to ask AI for a command suggestion</span>
+          </div>
+        )}
         <IconButton icon={Minus} title="Hide" onClick={() => toggleBottomTool("terminal")} className="size-7" />
       </div>
       <div
         ref={containerRef}
-        className="min-h-0 flex-1"
+        className="relative min-h-0 flex-1"
         onClick={() => active?.focus()}
         onContextMenu={(e) => {
           e.preventDefault();
           if (active) setMenu({ x: e.clientX, y: e.clientY });
         }}
-      />
+      >
+        {generating && (
+          <div className="pointer-events-none absolute right-4 bottom-3 z-10 flex items-center gap-2.5 rounded-lg border border-accent/40 bg-panel/95 px-3 py-1.5 text-xs font-medium text-accent shadow-lg shadow-black/40 backdrop-blur-md select-none">
+            <DotsSpinner size={13} />
+            <span>Generating command…</span>
+          </div>
+        )}
+      </div>
       {menu && <ContextMenu x={menu.x} y={menu.y} items={menuItems} onClose={closeMenu} />}
     </div>
   );
