@@ -6,6 +6,7 @@ import { terminalApi, type TerminalProfile, type TerminalProgram } from "../lib/
 import { remoteLabel, remoteOf } from "../lib/remote";
 import { setting, useUserSettings } from "../settings/store";
 import { linkProvider, openTerminalUrl } from "./links";
+import { generateTerminalCommand } from "../ai/store";
 
 const THEME: ITheme = {
   background: "#1e1f22",
@@ -95,6 +96,11 @@ let nextKey = 1;
 
 const TERMINAL_FONT = '"JetBrains Mono", "Cascadia Mono", Consolas, Menlo, monospace';
 
+/** Brown string colour (#CF8E6D) for natural language commands starting with '>'. */
+const NL_STRING_COLOR = "\x1b[38;2;207;142;109m";
+const NL_PROMPT_COLOR = "\x1b[1;36m";
+const ANSI_RESET = "\x1b[0m";
+
 /** `terminal.integrated.fontFamily` (else the editor's font) and `fontSize`. */
 function terminalFont(values = useUserSettings.getState().values) {
   const family = setting("terminal.integrated.fontFamily", "", values) || setting("editor.fontFamily", "", values) || TERMINAL_FONT;
@@ -155,6 +161,11 @@ export class TerminalSession {
   private queued = "";
   private readonly startListeners = new Set<(pid: number | null) => void>();
   private readonly exitListeners = new Set<(code: number | null) => void>();
+  private currentLine = "";
+  private nlActive = false;
+  private nlPrompt = "";
+  private nlGenerating = false;
+  private nlCancel: (() => void) | null = null;
 
   constructor(
     private readonly cwd: string | null,
@@ -330,7 +341,7 @@ export class TerminalSession {
       return;
     }
     this.term.onData((data) => {
-      if (this.ptyId !== null) void terminalApi.write(this.ptyId, data);
+      this.handleTerminalData(data);
     });
     if (this.queued && this.ptyId !== null) {
       void terminalApi.write(this.ptyId, this.queued);
@@ -341,6 +352,154 @@ export class TerminalSession {
     });
   }
 
+  private handleTerminalData(data: string) {
+    if (this.ptyId === null || this.exit) return;
+
+    // While AI is generating: allow cancellation with Ctrl+C or Escape.
+    if (this.nlGenerating) {
+      if (data === "\x03" || data === "\x1b") {
+        this.nlCancel?.();
+        this.nlCancel = null;
+        this.nlGenerating = false;
+        this.nlActive = false;
+        this.nlPrompt = "";
+        this.currentLine = "";
+        this.term.write("\r\x1b[2K^C\r\n");
+        void terminalApi.write(this.ptyId, "\x03");
+      }
+      return;
+    }
+
+    // While natural language query is active:
+    if (this.nlActive) {
+      // 1. Enter: execute AI command generation
+      if (data === "\r" || data === "\n" || data === "\r\n") {
+        const query = this.nlPrompt.trim();
+        if (!query) {
+          this.nlActive = false;
+          this.nlPrompt = "";
+          this.currentLine = "";
+          this.term.write("\r\n");
+          void terminalApi.write(this.ptyId, "\r");
+          return;
+        }
+
+        this.nlGenerating = true;
+        this.term.write("\r\n\x1b[90m⚡ Generating command...\x1b[0m");
+
+        const signal = { cancel: () => {} };
+        this.nlCancel = () => signal.cancel();
+
+        generateTerminalCommand(query, this.cwd, this.profile, signal)
+          .then((command) => {
+            if (!this.nlGenerating) return;
+            this.nlGenerating = false;
+            this.nlActive = false;
+            this.nlPrompt = "";
+            this.currentLine = command;
+
+            // Clear the "⚡ Generating command..." line and move cursor back to query line
+            this.term.write("\r\x1b[2K\x1b[A");
+
+            // Advance the shell to the next line and feed the suggested command
+            if (this.ptyId !== null && !this.exit) {
+              void terminalApi.write(this.ptyId, "\r");
+              setTimeout(() => {
+                if (this.ptyId !== null && !this.exit) {
+                  void terminalApi.write(this.ptyId, command);
+                }
+              }, 60);
+            }
+          })
+          .catch((err) => {
+            if (!this.nlGenerating) return;
+            this.nlGenerating = false;
+            this.nlActive = false;
+            this.nlPrompt = "";
+            this.currentLine = "";
+            const msg = err instanceof Error ? err.message : String(err);
+            this.term.write(`\r\x1b[2K\x1b[31m[AI: ${msg}]\x1b[0m\r\n`);
+            if (this.ptyId !== null && !this.exit) void terminalApi.write(this.ptyId, "\r");
+          });
+        return;
+      }
+
+      // 2. Backspace
+      if (data === "\x7f" || data === "\x08") {
+        if (this.nlPrompt.length > 0) {
+          this.nlPrompt = this.nlPrompt.slice(0, -1);
+          this.term.write("\b \b");
+        } else {
+          // Erase the '>' prefix and exit NL mode
+          this.term.write("\b \b");
+          this.nlActive = false;
+          this.currentLine = "";
+        }
+        return;
+      }
+
+      // 3. Ctrl+C or Escape: cancel NL mode
+      if (data === "\x03" || data === "\x1b") {
+        this.nlActive = false;
+        this.nlPrompt = "";
+        this.currentLine = "";
+        this.term.write("^C\r\n");
+        void terminalApi.write(this.ptyId, "\x03");
+        return;
+      }
+
+      // 4. Ctrl+U: clear line
+      if (data === "\x15") {
+        const eraseLen = this.nlPrompt.length + 1;
+        this.term.write("\b \b".repeat(eraseLen));
+        this.nlActive = false;
+        this.nlPrompt = "";
+        this.currentLine = "";
+        return;
+      }
+
+      // 5. Arrow keys and other escape sequences: ignore while typing NL query
+      if (data.startsWith("\x1b")) {
+        return;
+      }
+
+      // 6. Normal typed text: highlight in brown string colour
+      this.nlPrompt += data;
+      this.term.write(`${NL_STRING_COLOR}${data}${ANSI_RESET}`);
+      return;
+    }
+
+    // Natural language command trigger: line starts with '>'
+    if (this.currentLine.trim() === "" && data.startsWith(">")) {
+      this.nlActive = true;
+      let after = data.slice(1);
+      const hasNewline = after.includes("\r") || after.includes("\n");
+      after = after.replace(/[\r\n]+$/, "");
+      this.nlPrompt = after;
+      this.term.write(`${NL_PROMPT_COLOR}>${ANSI_RESET}`);
+      if (after) {
+        this.term.write(`${NL_STRING_COLOR}${after}${ANSI_RESET}`);
+      }
+      if (hasNewline) {
+        this.handleTerminalData("\r");
+      }
+      return;
+    }
+
+    // Normal command line tracking
+    if (data === "\r" || data === "\n" || data === "\r\n") {
+      this.currentLine = "";
+    } else if (data === "\x03" || data === "\x15") {
+      this.currentLine = "";
+    } else if (data === "\x7f" || data === "\x08") {
+      this.currentLine = this.currentLine.slice(0, -1);
+    } else if (!data.startsWith("\x1b")) {
+      this.currentLine += data;
+    }
+
+    void terminalApi.write(this.ptyId, data);
+  }
+
   setTheme(theme: ITheme) {
     this.background = theme.background!;
     this.term.options.theme = theme;
@@ -348,6 +507,8 @@ export class TerminalSession {
 
   dispose() {
     this.disposed = true;
+    this.nlCancel?.();
+    this.nlCancel = null;
     if (this.ptyId !== null) void terminalApi.kill(this.ptyId);
     this.term.dispose();
     this.host.remove();

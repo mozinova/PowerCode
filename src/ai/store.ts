@@ -693,3 +693,50 @@ export async function generateCommitMessage(root: string, signal?: { cancel?: ()
       .catch((e) => reject(e instanceof Error ? e : new Error(String(e))));
   });
 }
+
+import { cleanTerminalCommand, terminalCommandPrompt } from "../terminal/aiCommand";
+export { cleanTerminalCommand, terminalCommandPrompt };
+
+/** Translates a natural language prompt into a shell command using the commit message assistant. */
+export async function generateTerminalCommand(
+  query: string,
+  cwd: string | null,
+  profile: string | null,
+  signal?: { cancel?: () => void },
+): Promise<string> {
+  await detectAiProviders();
+  const { provider, model } = commitSelection();
+  if (!provider) {
+    throw new Error("No AI assistant was found. Configure Claude Code, Codex, OpenCode or Antigravity in Settings › AI.");
+  }
+  const root = cwd || "";
+  return new Promise<string>((resolve, reject) => {
+    let text = "";
+    aiApi
+      .run(
+        {
+          provider: provider.id,
+          path: provider.path,
+          model: model || null,
+          prompt: terminalCommandPrompt(query, cwd, profile),
+          cwd: root,
+          agent: false,
+          session: null,
+          oneShot: true,
+          attachments: [],
+        },
+        (event) => {
+          if (event.kind === "text") text += (event.start && text ? "\n" : "") + event.text;
+          if (event.kind === "done") {
+            if (event.error) reject(new Error(event.error));
+            else if (!text.trim()) reject(new Error(`${provider.name} gave no command.`));
+            else resolve(cleanTerminalCommand(text));
+          }
+        },
+      )
+      .then((run) => {
+        if (signal) signal.cancel = () => void aiApi.cancel(run);
+      })
+      .catch((e) => reject(e instanceof Error ? e : new Error(String(e))));
+  });
+}
