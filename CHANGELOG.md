@@ -8,6 +8,25 @@ taken from the Git history.
 numbering jumped (`0.1.5` → `0.1.7`, `0.1.8` → `0.1.81`). Tags with a suffix
 (e.g. `v0.1.90-beta`) are pre-releases.
 
+## [v0.1.94] - 2026-11-21
+
+- Antigravity (`agy`) is a fourth AI assistant: found on PATH or where
+  Antigravity installs it, its models from `agy models`, the prompt sent as
+  stream-json on stdin, conversations continued. Agent mode accepts edits and
+  allows commands; Ask plans and refuses commands, but Antigravity has no
+  read-only mode and may still write files (the Ask switch says so).
+- AI tool window:
+  - Up/Down go through the prompts sent, as in a terminal.
+  - Right-click on a message: copy it, the answer, the selection or the whole
+    conversation; edit a prompt in the input or send it again.
+  - Prompts sent while an answer is coming wait in a queue and go one by one.
+  - Attach files from the computer, or paste images: text files go inline,
+    images and other files by path (Claude `--add-dir`, Codex `--image`,
+    OpenCode `--file`, Antigravity `--add-dir`).
+  - Tools show what they returned; a click opens the whole input and output in
+    a read-only editor tab.
+- Antigravity and Gemini icons in the model picker and the settings.
+
 ## [v0.1.93] - 2026-11-20
 
 - OpenCode gets `--dir` and `PWD`, so it no longer works in the folder PowerCode started from
