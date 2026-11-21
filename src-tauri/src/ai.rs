@@ -1,4 +1,4 @@
-//! AI assistants installed on the computer (Claude Code, Codex, OpenCode), driven
+//! AI assistants installed on the computer (Claude Code, Codex, OpenCode, Antigravity), driven
 //! through their command-line programs in non-interactive mode: no terminal UI,
 //! the prompt goes in on stdin and the JSON lines they stream are turned into
 //! a few plain events (text, tool use, session, done) for the AI tool window and
@@ -25,9 +25,10 @@ enum Kind {
     Claude,
     Codex,
     OpenCode,
+    Antigravity,
 }
 
-const KINDS: [Kind; 3] = [Kind::Claude, Kind::Codex, Kind::OpenCode];
+const KINDS: [Kind; 4] = [Kind::Claude, Kind::Codex, Kind::OpenCode, Kind::Antigravity];
 
 impl Kind {
     fn parse(id: &str) -> CmdResult<Kind> {
@@ -39,6 +40,7 @@ impl Kind {
             Kind::Claude => "claude",
             Kind::Codex => "codex",
             Kind::OpenCode => "opencode",
+            Kind::Antigravity => "antigravity",
         }
     }
 
@@ -47,6 +49,15 @@ impl Kind {
             Kind::Claude => "Claude Code",
             Kind::Codex => "Codex",
             Kind::OpenCode => "OpenCode",
+            Kind::Antigravity => "Antigravity",
+        }
+    }
+
+    /// The command-line program's name.
+    fn program(self) -> &'static str {
+        match self {
+            Kind::Antigravity => "agy",
+            other => other.id(),
         }
     }
 }
@@ -97,13 +108,18 @@ fn search_dirs() -> Vec<PathBuf> {
     #[cfg(windows)]
     dirs.extend(registry_path());
     if let Some(home) = home() {
-        for relative in [".local/bin", ".claude/local", ".bun/bin", ".opencode/bin", ".npm-global/bin", ".volta/bin", ".cargo/bin"] {
+        for relative in [".local/bin", ".claude/local", ".bun/bin", ".opencode/bin", ".agy/bin", ".npm-global/bin", ".volta/bin", ".cargo/bin"] {
             dirs.push(home.join(relative));
         }
     }
     #[cfg(windows)]
     if let Some(appdata) = std::env::var_os("APPDATA") {
         dirs.push(PathBuf::from(appdata).join("npm"));
+    }
+    // Antigravity's CLI installs itself there.
+    #[cfg(windows)]
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(local).join("agy").join("bin"));
     }
     #[cfg(not(windows))]
     {
@@ -133,7 +149,7 @@ fn bundled(kind: Kind, extensions: &Path) -> Option<PathBuf> {
             .flatten()
             .map(|entry| entry.path().join(format!("codex{exe}")))
             .find(|p| p.is_file()),
-        Kind::OpenCode => None,
+        Kind::OpenCode | Kind::Antigravity => None,
     }
 }
 
@@ -185,7 +201,7 @@ fn version_number(output: &str) -> Option<String> {
 
 fn detect_one(kind: Kind, configured: Option<String>, dirs: &[PathBuf], extensions: Option<&Path>) -> Option<AiProvider> {
     let configured = configured.filter(|p| !p.trim().is_empty()).map(PathBuf::from).filter(|p| p.is_file());
-    let (path, bundled_copy) = match configured.or_else(|| find_program(kind.id(), dirs)) {
+    let (path, bundled_copy) = match configured.or_else(|| find_program(kind.program(), dirs)) {
         Some(path) => (path, false),
         None => (extensions.and_then(|e| bundled(kind, e))?, true),
     };
@@ -277,6 +293,24 @@ fn opencode_models(output: &str) -> Vec<AiModel> {
         .collect()
 }
 
+/// `agy models` prints `id<TAB>name` lines (after a "Fetching..." line).
+fn antigravity_models(output: &str) -> Vec<AiModel> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (id, name) = line.trim().split_once('\t')?;
+            (!id.is_empty() && !id.contains(' ')).then(|| model(id.trim(), name.trim(), None))
+        })
+        .collect()
+}
+
+/// `gemini-3.8-flash-low`, as `agy models` lists it, is refused as `--model`; the base
+/// model with `--effort low` is taken.
+fn split_effort(model: &str) -> Option<(&str, &str)> {
+    let (base, effort) = model.rsplit_once('-')?;
+    ["low", "medium", "high", "xhigh", "max"].contains(&effort).then_some((base, effort))
+}
+
 #[tauri::command(async)]
 pub fn ai_models(provider: String, path: String) -> CmdResult<Vec<AiModel>> {
     let mut models = vec![model("", "Default", Some("The program's own default"))];
@@ -287,6 +321,7 @@ pub fn ai_models(provider: String, path: String) -> CmdResult<Vec<AiModel>> {
             dir.and_then(|d| std::fs::read_to_string(d.join("models_cache.json")).ok()).map(|c| codex_models(&c)).unwrap_or_default()
         }
         Kind::OpenCode => output_within(Path::new(&path), &["models"], Duration::from_secs(30)).map(|o| opencode_models(&o)).unwrap_or_default(),
+        Kind::Antigravity => output_within(Path::new(&path), &["models"], Duration::from_secs(60)).map(|o| antigravity_models(&o)).unwrap_or_default(),
     });
     Ok(models)
 }
@@ -308,6 +343,9 @@ pub struct AiRequest {
     session: Option<String>,
     /// A one-off answer: no tools, nothing saved (commit messages).
     one_shot: bool,
+    /// Images (and other non-text files) attached, by absolute path; text files come inline in the prompt.
+    #[serde(default)]
+    attachments: Vec<String>,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -317,8 +355,11 @@ pub enum AiEvent {
     Session { id: String },
     /// Answer text; `start` begins a new paragraph block instead of extending the last.
     Text { text: String, start: bool },
-    /// The assistant used a tool (read a file, ran a command, edited ...).
-    Tool { title: String, detail: Option<String> },
+    /// The assistant used a tool (read a file, ran a command, edited ...): `input` is what it
+    /// was given (JSON, or the command), `id` matches the `ToolOutput` that follows.
+    Tool { id: Option<String>, title: String, detail: Option<String>, input: Option<String> },
+    /// What a tool returned (or its error).
+    ToolOutput { id: String, output: String, error: bool },
     /// Something the user should know, e.g. a change refused in Ask mode.
     Notice { text: String },
     /// How full the conversation's context is: tokens in it, and the model's window when the program says.
@@ -346,6 +387,10 @@ fn arguments(kind: Kind, request: &AiRequest) -> Vec<String> {
             if let Some(session) = &request.session {
                 push(&["--resume", session]);
             }
+            // Attachments outside the project: Claude reads them (images too) with its Read tool.
+            for dir in attachment_dirs(request) {
+                push(&["--add-dir", &dir]);
+            }
         }
         Kind::Codex => {
             // `-c sandbox_mode`: `exec resume` takes no `--sandbox`.
@@ -353,6 +398,9 @@ fn arguments(kind: Kind, request: &AiRequest) -> Vec<String> {
             push(&["exec", "-c", &format!("sandbox_mode=\"{sandbox}\""), "--skip-git-repo-check"]);
             if let Some(session) = &request.session {
                 push(&["resume", session]);
+            }
+            for image in request.attachments.iter().filter(|a| is_image(a)) {
+                push(&[&format!("--image={image}")]);
             }
             push(&["--json"]);
             if request.one_shot {
@@ -373,9 +421,80 @@ fn arguments(kind: Kind, request: &AiRequest) -> Vec<String> {
             if let Some(session) = &request.session {
                 push(&["--session", session]);
             }
+            for file in &request.attachments {
+                push(&[&format!("--file={file}")]);
+            }
+        }
+        Kind::Antigravity => {
+            // The prompt comes on stdin as a stream-json message: `-p` takes it as an
+            // argument, which Windows limits to about 32k characters.
+            push(&["--output-format", "stream-json", "--input-format", "stream-json"]);
+            match model.map(|m| (m, split_effort(m))) {
+                Some((_, Some((base, effort)))) => push(&["--model", base, "--effort", effort]),
+                Some((model, None)) => push(&["--model", model]),
+                None => {}
+            }
+            if request.agent && !request.one_shot {
+                // Headless mode cannot ask: commands are allowed up front, edits by the mode.
+                push(&["--mode", "accept-edits", "--settings", r#"{"permissions":{"allow":["command(*)"]}}"#]);
+            } else {
+                // Antigravity has no read-only mode: plan, with commands refused. It may still
+                // write files (deny rules do not cover them); the Ask switch says so.
+                push(&["--mode", "plan", "--settings", r#"{"permissions":{"deny":["command(*)"]}}"#]);
+            }
+            if let Some(session) = &request.session {
+                push(&["--conversation", session]);
+            }
+            for dir in attachment_dirs(request) {
+                push(&["--add-dir", &dir]);
+            }
         }
     }
     args
+}
+
+fn is_image(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    [".png", ".jpg", ".jpeg", ".gif", ".webp"].iter().any(|ext| lower.ends_with(ext))
+}
+
+/// The folders of the attachments, once each, for programs that only read inside allowed folders.
+fn attachment_dirs(request: &AiRequest) -> Vec<String> {
+    let mut dirs: Vec<String> = Vec::new();
+    for file in &request.attachments {
+        if let Some(dir) = Path::new(file).parent().map(|d| d.to_string_lossy().into_owned()) {
+            if !dir.is_empty() && !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs
+}
+
+/// Saves an image pasted into the AI tool window (base64) and returns its path, to attach it.
+#[tauri::command(async)]
+pub fn ai_save_image(app: AppHandle, data: String, extension: String) -> CmdResult<String> {
+    use base64::Engine;
+    let extension = extension.to_lowercase();
+    if !["png", "jpg", "jpeg", "gif", "webp"].contains(&extension.as_str()) {
+        return Err(format!("Unsupported image type: {extension}"));
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes()).map_err(err)?;
+    let dir = app.path().app_data_dir().map_err(err)?.join("ai-attachments");
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let path = dir.join(format!("pasted-{stamp}-{}.{extension}", NEXT.fetch_add(1, Ordering::Relaxed)));
+    std::fs::write(&path, bytes).map_err(err)?;
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// What goes to the program's stdin: the prompt, or for Antigravity one stream-json message.
+fn stdin_payload(kind: Kind, prompt: &str) -> String {
+    match kind {
+        Kind::Antigravity => format!("{}\n", serde_json::json!({ "event": "user", "message": { "content": prompt } })),
+        _ => prompt.to_string(),
+    }
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -388,10 +507,66 @@ fn truncate(text: &str, max: usize) -> String {
 
 /// What a tool call was about, from its input: a file, a command, a search.
 fn tool_detail(input: &Value) -> Option<String> {
-    ["file_path", "path", "notebook_path", "command", "pattern", "url", "query", "description", "filePath"]
+    [
+        "file_path", "path", "notebook_path", "command", "pattern", "url", "query", "description", "filePath",
+        // Antigravity's parameters.
+        "Path", "AbsolutePath", "TargetFile", "CommandLine", "Query", "SearchPath", "Url",
+    ]
         .iter()
         .find_map(|key| input.get(key).and_then(Value::as_str))
         .map(|s| truncate(s, 200))
+}
+
+/// Antigravity's tool names, as the other programs call them (and the UI has icons for).
+fn antigravity_tool(name: &str) -> &str {
+    match name {
+        "read_file" | "view_file" => "Read",
+        "write_file" | "write_to_file" => "Write",
+        "edit_file" | "replace_file_content" | "multi_replace_file_content" => "Edit",
+        "run_command" => "Run",
+        "grep_search" => "Grep",
+        "find_by_name" | "list_dir" => "Glob",
+        "search_web" => "Search the web",
+        other => other,
+    }
+}
+
+const MAX_TOOL_INPUT: usize = 20_000;
+const MAX_TOOL_OUTPUT: usize = 50_000;
+
+/// `text` up to `max` bytes (on a character boundary), saying when it was cut.
+fn cap(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.to_string();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n… ({} more bytes)", &text[..end], text.len() - end)
+}
+
+/// A tool's input as text: a string as it is, anything else as pretty JSON.
+fn tool_input(value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => Some(cap(text, MAX_TOOL_INPUT)),
+        Value::Object(map) if map.is_empty() => None,
+        other => serde_json::to_string_pretty(other).ok().map(|t| cap(&t, MAX_TOOL_INPUT)),
+    }
+}
+
+/// A tool's output as text: a string, text blocks (`[{type: "text", text}]`), or JSON.
+fn tool_output(value: &Value) -> Option<String> {
+    let text = match value {
+        Value::Null => return None,
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) if blocks.iter().all(|b| b["text"].is_string()) => {
+            blocks.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n")
+        }
+        other => serde_json::to_string_pretty(other).ok()?,
+    };
+    Some(cap(&text, MAX_TOOL_OUTPUT))
 }
 
 /// Codex shows commands wrapped in the shell it ran them with.
@@ -415,8 +590,11 @@ pub struct Parser {
     block_start: bool,
     /// OpenCode: plain (non-JSON) output already started.
     plain: bool,
-    /// Claude: tokens of the last request of the main conversation (prompt, then its answer).
+    /// Claude: tokens of the last request of the main conversation (prompt, then its answer);
+    /// Antigravity: of its last step.
     context: u64,
+    /// Antigravity: the step the text came from, so a new step starts a new block.
+    step: Option<i64>,
     error: Option<String>,
 }
 
@@ -452,6 +630,7 @@ impl Parser {
             Some(Kind::Claude) => self.claude(&json, &mut events),
             Some(Kind::Codex) => self.codex(&json, &mut events),
             Some(Kind::OpenCode) => self.opencode(&json, &mut events),
+            Some(Kind::Antigravity) => self.antigravity(&json, &mut events),
             None => {}
         }
         events
@@ -500,8 +679,10 @@ impl Parser {
                 for block in json["message"]["content"].as_array().into_iter().flatten() {
                     match block["type"].as_str() {
                         Some("tool_use") => events.push(AiEvent::Tool {
+                            id: block["id"].as_str().map(str::to_string),
                             title: block["name"].as_str().unwrap_or("Tool").into(),
                             detail: tool_detail(&block["input"]),
+                            input: tool_input(&block["input"]),
                         }),
                         // Without partial messages (older versions) the text only comes here.
                         Some("text") if !self.streamed => {
@@ -510,6 +691,18 @@ impl Parser {
                             }
                         }
                         _ => {}
+                    }
+                }
+            }
+            // Tool results come back as the user's turn.
+            Some("user") => {
+                for block in json["message"]["content"].as_array().into_iter().flatten() {
+                    if let (Some("tool_result"), Some(id)) = (block["type"].as_str(), block["tool_use_id"].as_str()) {
+                        events.push(AiEvent::ToolOutput {
+                            id: id.into(),
+                            output: tool_output(&block["content"]).unwrap_or_default(),
+                            error: block["is_error"].as_bool() == Some(true),
+                        });
                     }
                 }
             }
@@ -530,28 +723,68 @@ impl Parser {
 
     fn codex(&mut self, json: &Value, events: &mut Vec<AiEvent>) {
         let item = &json["item"];
+        let id = item["id"].as_str().map(str::to_string);
         match (json["type"].as_str(), item["type"].as_str()) {
             (Some("thread.started"), _) => self.session(json["thread_id"].as_str(), events),
-            (Some("item.started"), Some("command_execution")) => events.push(AiEvent::Tool {
-                title: "Run".into(),
-                detail: item["command"].as_str().map(|c| truncate(&unwrap_shell(c), 200)),
-            }),
+            (Some("item.started"), Some("command_execution")) => {
+                let command = item["command"].as_str().map(unwrap_shell);
+                events.push(AiEvent::Tool {
+                    id,
+                    title: "Run".into(),
+                    detail: command.as_deref().map(|c| truncate(c, 200)),
+                    input: command,
+                })
+            }
+            (Some("item.completed"), Some("command_execution")) => {
+                if let Some(id) = id {
+                    let exit = item["exit_code"].as_i64();
+                    events.push(AiEvent::ToolOutput {
+                        id,
+                        output: tool_output(&item["aggregated_output"]).unwrap_or_default(),
+                        error: exit.is_some_and(|code| code != 0),
+                    });
+                }
+            }
             (Some("item.completed"), Some("agent_message")) => {
                 if let Some(text) = item["text"].as_str() {
                     events.push(AiEvent::Text { text: text.into(), start: true });
                 }
             }
             (Some("item.completed"), Some("file_change")) => {
-                let paths: Vec<&str> = item["changes"].as_array().into_iter().flatten().filter_map(|c| c["path"].as_str()).collect();
-                events.push(AiEvent::Tool { title: "Edit".into(), detail: Some(truncate(&paths.join(", "), 300)).filter(|s| !s.is_empty()) });
+                let changes: Vec<(&str, &str)> = item["changes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| Some((c["kind"].as_str().unwrap_or("change"), c["path"].as_str()?)))
+                    .collect();
+                let paths: Vec<&str> = changes.iter().map(|(_, path)| *path).collect();
+                events.push(AiEvent::Tool { id: id.clone(), title: "Edit".into(), detail: Some(truncate(&paths.join(", "), 300)).filter(|s| !s.is_empty()), input: None });
+                if let Some(id) = id {
+                    let output = changes.iter().map(|(kind, path)| format!("{kind} {path}")).collect::<Vec<_>>().join("\n");
+                    events.push(AiEvent::ToolOutput { id, output, error: item["status"] == "failed" });
+                }
             }
-            (Some("item.completed"), Some("mcp_tool_call")) => events.push(AiEvent::Tool {
-                title: format!("{}: {}", item["server"].as_str().unwrap_or("MCP"), item["tool"].as_str().unwrap_or("tool")),
-                detail: None,
+            (Some("item.completed"), Some("mcp_tool_call")) => {
+                events.push(AiEvent::Tool {
+                    id: id.clone(),
+                    title: format!("{}: {}", item["server"].as_str().unwrap_or("MCP"), item["tool"].as_str().unwrap_or("tool")),
+                    detail: None,
+                    input: tool_input(&item["arguments"]),
+                });
+                let (output, error) = match tool_output(&item["error"]) {
+                    Some(error) => (Some(error), true),
+                    None => (tool_output(&item["result"]), false),
+                };
+                if let (Some(id), Some(output)) = (id, output) {
+                    events.push(AiEvent::ToolOutput { id, output, error });
+                }
+            }
+            (Some("item.completed"), Some("web_search")) => events.push(AiEvent::Tool {
+                id,
+                title: "Search the web".into(),
+                detail: item["query"].as_str().map(|q| truncate(q, 200)),
+                input: item["query"].as_str().map(str::to_string),
             }),
-            (Some("item.completed"), Some("web_search")) => {
-                events.push(AiEvent::Tool { title: "Search the web".into(), detail: item["query"].as_str().map(|q| truncate(q, 200)) })
-            }
             // The turn's total: with several requests in a turn, more than the context holds.
             (Some("turn.completed"), _) => {
                 let usage = &json["usage"];
@@ -568,6 +801,72 @@ impl Parser {
         }
     }
 
+    fn antigravity(&mut self, json: &Value, events: &mut Vec<AiEvent>) {
+        match json["event"].as_str() {
+            Some("init") => self.session(json["conversation_id"].as_str(), events),
+            Some("step_update") => {
+                let step = &json["step_update"];
+                self.session(step["conversation_id"].as_str(), events);
+                match step["step_type"].as_str() {
+                    Some("agent_response") => {
+                        if let Some(text) = step["text_delta"].as_str().filter(|t| !t.is_empty()) {
+                            let index = step["step_index"].as_i64();
+                            let start = self.step != index;
+                            self.step = index;
+                            events.push(AiEvent::Text { text: text.into(), start });
+                        }
+                        let usage = &step["usage"];
+                        if step["state"] == "DONE" && usage.is_object() {
+                            self.context = ["input_tokens", "cache_read_tokens", "output_tokens"].iter().map(|k| usage[k].as_u64().unwrap_or(0)).sum();
+                        }
+                    }
+                    Some("tool") => {
+                        let name = antigravity_tool(step["tool_name"].as_str().unwrap_or("Tool"));
+                        let info = &step["tool_info"];
+                        // A tool is one step: its index ties the call to its result.
+                        let id = step["step_index"].as_i64().map(|i| format!("step-{i}"));
+                        match step["state"].as_str() {
+                            Some("ACTIVE") => events.push(AiEvent::Tool {
+                                id,
+                                title: name.into(),
+                                detail: tool_detail(&info["parameters"]),
+                                input: tool_input(&info["parameters"]),
+                            }),
+                            Some("DONE") => {
+                                if let Some(id) = id {
+                                    events.push(AiEvent::ToolOutput { id, output: tool_output(&info["output"]).unwrap_or_default(), error: false });
+                                }
+                            }
+                            Some("ERROR") => {
+                                let message = info["error"]["message"].as_str().unwrap_or("");
+                                if let Some(id) = id {
+                                    events.push(AiEvent::ToolOutput { id, output: cap(message, MAX_TOOL_OUTPUT), error: true });
+                                }
+                                if message.contains("denied") || message.contains("permission") {
+                                    let first = message.lines().next().unwrap_or(message);
+                                    events.push(AiEvent::Notice { text: format!("{name} was not allowed: {}", truncate(first, 300)) });
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Some("result") => {
+                let result = &json["result"];
+                self.session(result["conversation_id"].as_str(), events);
+                if self.context > 0 {
+                    events.push(AiEvent::Usage { used: self.context, window: None });
+                }
+                if result["status"] == "ERROR" {
+                    self.error = Some(result["error"].as_str().unwrap_or("The request failed").to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn opencode(&mut self, json: &Value, events: &mut Vec<AiEvent>) {
         self.session(json["sessionID"].as_str().or(json["part"]["sessionID"].as_str()), events);
         let part = &json["part"];
@@ -577,11 +876,22 @@ impl Parser {
                     events.push(AiEvent::Text { text: text.into(), start: true });
                 }
             }
-            Some("tool_use") => events.push(AiEvent::Tool {
-                title: part["tool"].as_str().unwrap_or("Tool").into(),
-                // The input's path is whole; OpenCode's title cuts the path's start.
-                detail: tool_detail(&part["state"]["input"]).or_else(|| part["state"]["title"].as_str().map(|t| truncate(t, 200))),
-            }),
+            Some("tool_use") => {
+                let state = &part["state"];
+                let id = part["callID"].as_str().map(str::to_string);
+                events.push(AiEvent::Tool {
+                    id: id.clone(),
+                    title: part["tool"].as_str().unwrap_or("Tool").into(),
+                    // The input's path is whole; OpenCode's title cuts the path's start.
+                    detail: tool_detail(&state["input"]).or_else(|| state["title"].as_str().map(|t| truncate(t, 200))),
+                    input: tool_input(&state["input"]),
+                });
+                // OpenCode reports a tool once done, with its output.
+                let error = state["status"] == "error";
+                if let (Some(id), Some(output)) = (id, tool_output(if error { &state["error"] } else { &state["output"] })) {
+                    events.push(AiEvent::ToolOutput { id, output, error });
+                }
+            }
             Some("step_finish") => {
                 // Each step is one request: its total is what the context holds.
                 let tokens = &part["tokens"];
@@ -666,7 +976,7 @@ fn start(runs: Arc<AiRuns>, request: AiRequest, send: impl Fn(AiEvent) + Send + 
     runs.running.lock().map_err(err)?.insert(id, (child.id(), stopped.clone()));
 
     let mut stdin = child.stdin.take().ok_or("No stdin")?;
-    let prompt = request.prompt.clone();
+    let prompt = stdin_payload(kind, &request.prompt);
     std::thread::spawn(move || {
         let _ = stdin.write_all(prompt.as_bytes());
         // Dropped: end of input, the program starts.
@@ -733,6 +1043,7 @@ mod tests {
             agent,
             session: session.map(str::to_string),
             one_shot,
+            attachments: Vec::new(),
         }
     }
 
@@ -777,6 +1088,8 @@ mod tests {
                 r#"{"type":"assistant","message":{"content":[{"type":"text","text":"hi there"}]}}"#,
                 r#"{"type":"stream_event","event":{"type":"message_start","message":{}}}"#,
                 r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"C:\\w\\a.txt"}}]}}"#,
+                r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"1\thello"}]}}"#,
+                r#"{"type":"user","message":{"role":"user","content":[{"tool_use_id":"toolu_2","type":"tool_result","content":[{"type":"text","text":"denied"}],"is_error":true}]}}"#,
                 r#"{"type":"system","subtype":"permission_denied","tool_name":"Write","message":"Claude requested permissions to write"}"#,
                 r#"{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{"usage":{"input_tokens":2,"cache_read_input_tokens":1000,"cache_creation_input_tokens":500}}}}"#,
                 r#"{"type":"stream_event","parent_tool_use_id":"toolu_sub","event":{"type":"message_start","message":{"usage":{"input_tokens":90000}}}}"#,
@@ -791,7 +1104,9 @@ mod tests {
                 AiEvent::Session { id: "abc".into() },
                 AiEvent::Text { text: "hi ".into(), start: true },
                 AiEvent::Text { text: "there".into(), start: false },
-                AiEvent::Tool { title: "Read".into(), detail: Some("C:\\w\\a.txt".into()) },
+                AiEvent::Tool { id: None, title: "Read".into(), detail: Some("C:\\w\\a.txt".into()), input: Some("{\n  \"file_path\": \"C:\\\\w\\\\a.txt\"\n}".into()) },
+                AiEvent::ToolOutput { id: "toolu_1".into(), output: "1\thello".into(), error: false },
+                AiEvent::ToolOutput { id: "toolu_2".into(), output: "denied".into(), error: true },
                 AiEvent::Notice { text: "Write was not allowed: Claude requested permissions to write".into() },
                 AiEvent::Usage { used: 1542, window: Some(200000) },
             ]
@@ -821,8 +1136,10 @@ mod tests {
             [
                 AiEvent::Session { id: "t1".into() },
                 AiEvent::Text { text: "Reading it.".into(), start: true },
-                AiEvent::Tool { title: "Run".into(), detail: Some("Get-Content sample.txt".into()) },
-                AiEvent::Tool { title: "Edit".into(), detail: Some("src/a.ts".into()) },
+                AiEvent::Tool { id: Some("item_1".into()), title: "Run".into(), detail: Some("Get-Content sample.txt".into()), input: Some("Get-Content sample.txt".into()) },
+                AiEvent::ToolOutput { id: "item_1".into(), output: String::new(), error: false },
+                AiEvent::Tool { id: Some("item_2".into()), title: "Edit".into(), detail: Some("src/a.ts".into()), input: None },
+                AiEvent::ToolOutput { id: "item_2".into(), output: "update src/a.ts".into(), error: false },
                 AiEvent::Text { text: "Done.".into(), start: true },
                 AiEvent::Usage { used: 1230, window: None },
             ]
@@ -839,17 +1156,18 @@ mod tests {
                 r#"{"type":"tool_use","sessionID":"ses_1","part":{"tool":"read","state":{"status":"completed","title":"src/a.ts"}}}"#,
                 r#"{"type":"text","sessionID":"ses_1","part":{"type":"text","text":"It exports a."}}"#,
                 r#"{"type":"step_finish","sessionID":"ses_1","part":{"type":"step-finish","tokens":{"total":10724,"input":224,"output":4,"reasoning":0,"cache":{"write":0,"read":10496}},"cost":0}}"#,
-                r#"{"type":"tool_use","sessionID":"ses_1","part":{"type":"tool","tool":"read","state":{"status":"completed","input":{"filePath":"C:\\w\\b.txt"}}}}"#,
+                r#"{"type":"tool_use","sessionID":"ses_1","part":{"type":"tool","tool":"read","callID":"call_2","state":{"status":"completed","input":{"filePath":"C:\\w\\b.txt"},"output":"1: x"}}}"#,
             ],
         );
         assert_eq!(
             events,
             [
                 AiEvent::Session { id: "ses_1".into() },
-                AiEvent::Tool { title: "read".into(), detail: Some("src/a.ts".into()) },
+                AiEvent::Tool { id: None, title: "read".into(), detail: Some("src/a.ts".into()), input: None },
                 AiEvent::Text { text: "It exports a.".into(), start: true },
                 AiEvent::Usage { used: 10724, window: None },
-                AiEvent::Tool { title: "read".into(), detail: Some("C:\\w\\b.txt".into()) },
+                AiEvent::Tool { id: Some("call_2".into()), title: "read".into(), detail: Some("C:\\w\\b.txt".into()), input: Some("{\n  \"filePath\": \"C:\\\\w\\\\b.txt\"\n}".into()) },
+                AiEvent::ToolOutput { id: "call_2".into(), output: "1: x".into(), error: false },
             ]
         );
         let (events, _) = parse(Kind::OpenCode, &["plain one", "plain two"]);
@@ -873,7 +1191,7 @@ mod tests {
             if std::env::var("AI_ONLY").is_ok_and(|only| only != kind.id()) {
                 continue;
             }
-            let path = std::env::var(format!("AI_{}", kind.id().to_uppercase())).ok().map(PathBuf::from).or_else(|| find_program(kind.id(), &search_dirs()));
+            let path = std::env::var(format!("AI_{}", kind.id().to_uppercase())).ok().map(PathBuf::from).or_else(|| find_program(kind.program(), &search_dirs()));
             let Some(path) = path else {
                 println!("{}: not installed", kind.name());
                 continue;
@@ -893,6 +1211,7 @@ mod tests {
                     agent,
                     session,
                     one_shot: false,
+                    attachments: Vec::new(),
                 };
                 start(runs, request, move |e| tx.send(e).unwrap()).unwrap();
                 let mut events = Vec::new();
@@ -917,7 +1236,13 @@ mod tests {
             // Ask mode changes nothing.
             let refused = ask("Create a file named out.txt containing x. If you cannot, say so.", session.clone(), false);
             println!("{} (ask, write): {:?}", kind.name(), refused);
-            assert!(!cwd.join("out.txt").exists(), "{}: wrote a file in Ask mode", kind.name());
+            if kind == Kind::Antigravity {
+                // No read-only mode (see `arguments`): reported, not asserted.
+                println!("{} wrote a file in Ask mode: {}", kind.name(), cwd.join("out.txt").exists());
+                let _ = std::fs::remove_file(cwd.join("out.txt"));
+            } else {
+                assert!(!cwd.join("out.txt").exists(), "{}: wrote a file in Ask mode", kind.name());
+            }
             let again = ask("What was the word? Reply with only the word.", session, false);
             println!("{} (continued): {:?}", kind.name(), again);
             let text: String = again.iter().filter_map(|e| if let AiEvent::Text { text, .. } = e { Some(text.as_str()) } else { None }).collect();
@@ -926,11 +1251,95 @@ mod tests {
     }
 
     #[test]
+    fn attachments_reach_each_program_as_it_takes_them() {
+        let mut with = request(false, None, "", false);
+        with.attachments = vec!["C:\\data\\ai-attachments\\pasted-1.png".into(), "C:\\docs\\spec.pdf".into()];
+        let claude = arguments(Kind::Claude, &with);
+        assert!(claude.windows(2).any(|w| w == ["--add-dir", "C:\\data\\ai-attachments"]));
+        assert!(claude.windows(2).any(|w| w == ["--add-dir", "C:\\docs"]));
+        let codex = arguments(Kind::Codex, &with);
+        // Only images, before `--json`, and the prompt still read from stdin last.
+        assert_eq!(codex.iter().filter(|a| a.starts_with("--image=")).collect::<Vec<_>>(), ["--image=C:\\data\\ai-attachments\\pasted-1.png"]);
+        assert!(codex.iter().position(|a| a.starts_with("--image=")) < codex.iter().position(|a| a == "--json"));
+        assert_eq!(codex.last().map(String::as_str), Some("-"));
+        assert_eq!(arguments(Kind::OpenCode, &with).iter().filter(|a| a.starts_with("--file=")).count(), 2);
+        assert!(arguments(Kind::Antigravity, &with).windows(2).any(|w| w == ["--add-dir", "C:\\docs"]));
+    }
+
+    #[test]
+    fn antigravity_arguments_input_and_models() {
+        let mut ask = request(false, Some("c1"), "gemini-3.8-flash-low", false);
+        ask.cwd = "C:\\w".into();
+        assert_eq!(
+            arguments(Kind::Antigravity, &ask),
+            [
+                "--output-format", "stream-json", "--input-format", "stream-json", "--model", "gemini-3.8-flash", "--effort", "low",
+                "--mode", "plan", "--settings", r#"{"permissions":{"deny":["command(*)"]}}"#, "--conversation", "c1",
+            ]
+        );
+        let agent = arguments(Kind::Antigravity, &request(true, None, "claude-sonnet-4-6", false));
+        assert!(agent.windows(2).any(|w| w == ["--model", "claude-sonnet-4-6"]));
+        assert!(agent.windows(2).any(|w| w == ["--mode", "accept-edits"]));
+        assert_eq!(split_effort("gpt-oss-120b-medium"), Some(("gpt-oss-120b", "medium")));
+        assert_eq!(split_effort("claude-opus-4-6-thinking"), None);
+        assert_eq!(stdin_payload(Kind::Antigravity, "hi \"there\""), "{\"event\":\"user\",\"message\":{\"content\":\"hi \\\"there\\\"\"}}\n");
+        assert_eq!(stdin_payload(Kind::Claude, "hi"), "hi");
+        assert_eq!(
+            antigravity_models("Fetching available models...\ngemini-3.8-flash-low\tGemini 3.8 Flash (Low)\nclaude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n"),
+            [model("gemini-3.8-flash-low", "Gemini 3.8 Flash (Low)", None), model("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)", None)]
+        );
+    }
+
+    #[test]
+    fn antigravity_stream_becomes_text_tools_and_usage() {
+        let (events, error) = parse(
+            Kind::Antigravity,
+            &[
+                r#"{"event":"init","conversation_id":"c1","init":{"cwd":"C:\\w","tools":["read_file"]}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":0,"state":"DONE","step_type":"user_input"}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"read_file","tool_info":{"name":"read_file","parameters":{"Path":"C:\\w\\sample.txt"}}}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":2,"state":"DONE","step_type":"tool","tool_name":"read_file","tool_info":{"output":"1 lines"}}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":3,"state":"ERROR","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"Get-ChildItem"},"error":{"type":"TOOL_ERROR","message":"permission check failed for unsandboxed \"Get-ChildItem\": user denied permission to run command:\nGet-ChildItem"}}}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":4,"state":"ACTIVE","step_type":"agent_response","text_delta":"pine"}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":4,"state":"ACTIVE","step_type":"agent_response","text_delta":"apple"}}"#,
+                r#"{"event":"step_update","step_update":{"conversation_id":"c1","step_index":4,"state":"DONE","step_type":"agent_response","text_delta":"\n","usage":{"input_tokens":2252,"output_tokens":2326,"cache_read_tokens":13763,"total_tokens":4578}}}"#,
+                r#"{"event":"result","result":{"conversation_id":"c1","status":"SUCCESS","response":"pineapple\n"}}"#,
+            ],
+        );
+        assert_eq!(error, None);
+        assert_eq!(
+            events,
+            [
+                AiEvent::Session { id: "c1".into() },
+                AiEvent::Tool { id: Some("step-2".into()), title: "Read".into(), detail: Some("C:\\w\\sample.txt".into()), input: Some("{\n  \"Path\": \"C:\\\\w\\\\sample.txt\"\n}".into()) },
+                AiEvent::ToolOutput { id: "step-2".into(), output: "1 lines".into(), error: false },
+                AiEvent::ToolOutput { id: "step-3".into(), output: "permission check failed for unsandboxed \"Get-ChildItem\": user denied permission to run command:\nGet-ChildItem".into(), error: true },
+                AiEvent::Notice { text: "Run was not allowed: permission check failed for unsandboxed \"Get-ChildItem\": user denied permission to run command:".into() },
+                AiEvent::Text { text: "pine".into(), start: true },
+                AiEvent::Text { text: "apple".into(), start: false },
+                AiEvent::Text { text: "\n".into(), start: false },
+                AiEvent::Usage { used: 18341, window: None },
+            ]
+        );
+        let (_, error) = parse(Kind::Antigravity, &[r#"{"event":"result","result":{"conversation_id":"","status":"ERROR","error":"invalid model selection"}}"#]);
+        assert_eq!(error.as_deref(), Some("invalid model selection"));
+    }
+
+    #[test]
     fn versions_are_read_from_version_output() {
         assert_eq!(version_number("2.1.328 (Claude Code)\n").as_deref(), Some("2.1.328"));
         assert_eq!(version_number("codex-cli 0.170.0").as_deref(), Some("0.170.0"));
         assert_eq!(version_number("opencode v1.2.3").as_deref(), Some("1.2.3"));
         assert_eq!(version_number("unknown"), None);
+    }
+
+    #[test]
+    fn long_tool_output_is_cut_on_a_character_boundary() {
+        let text = "é".repeat(30_000);
+        let cut = cap(&text, MAX_TOOL_OUTPUT);
+        assert!(cut.len() < text.len() && cut.ends_with("more bytes)"));
+        assert_eq!(tool_output(&serde_json::json!([{ "type": "text", "text": "a" }, { "type": "text", "text": "b" }])).as_deref(), Some("a\nb"));
+        assert_eq!(tool_input(&serde_json::json!({})), None);
     }
 
     #[test]

@@ -14,7 +14,17 @@ import { useWorkspace } from "../state/workspace";
 
 export type AiPart =
   | { kind: "text"; text: string }
-  | { kind: "tool"; title: string; detail: string | null }
+  | {
+      kind: "tool";
+      /** Ties the call to its output. */
+      id?: string | null;
+      title: string;
+      detail: string | null;
+      /** What the tool was given (JSON or a command), and what it returned. */
+      input?: string | null;
+      output?: string | null;
+      error?: boolean;
+    }
   | { kind: "notice"; text: string };
 
 export interface AiTurn {
@@ -28,6 +38,22 @@ export interface AiTurn {
   parts: AiPart[];
   done: boolean;
   error: string | null;
+}
+
+/** A file attached to a prompt: from the computer, or an image pasted (saved by `ai_save_image`). */
+export interface AiAttachment {
+  path: string;
+  name: string;
+  image: boolean;
+  /** An object URL showing a pasted image. */
+  preview?: string;
+}
+
+/** A prompt sent while the assistant was busy: it goes once the answer is done. */
+export interface QueuedPrompt {
+  id: number;
+  prompt: string;
+  attachments: AiAttachment[];
 }
 
 interface AiState {
@@ -50,6 +76,8 @@ interface AiState {
   conversationId: string | null;
   /** The open project's saved conversations, newest first. */
   history: SavedConversation[];
+  /** Prompts waiting for the current answer to finish. */
+  queue: QueuedPrompt[];
   /** The request in progress. */
   running: number | null;
   /** Agent (may edit) or Ask (read-only). */
@@ -89,13 +117,14 @@ export const useAi = create<AiState>(() => ({
   pickerOpen: false,
   conversationId: null,
   history: [],
+  queue: [],
   running: null,
   agent: stored(MODE_KEY, false),
   includeFile: stored(FILE_KEY, true),
 }));
 
-export const AI_PROVIDER_IDS: AiProviderId[] = ["claude", "codex", "opencode"];
-export const AI_PROVIDER_NAMES: Record<AiProviderId, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode" };
+export const AI_PROVIDER_IDS: AiProviderId[] = ["claude", "codex", "opencode", "antigravity"];
+export const AI_PROVIDER_NAMES: Record<AiProviderId, string> = { claude: "Claude Code", codex: "Codex", opencode: "OpenCode", antigravity: "Antigravity" };
 
 // ---- Providers and models -------------------------------------------------------------
 
@@ -326,9 +355,91 @@ function knownWindow(provider: AiProviderId, model: string): number | null {
 }
 
 /** Sends `prompt` to the chosen program, continuing its session and sharing what others said. */
-export async function sendAiPrompt(prompt: string): Promise<void> {
+// ---- Prompt history (Up/Down in the input, as in a terminal) -------------------------------
+
+const PROMPT_HISTORY_KEY = "powercode.aiPromptHistory";
+const MAX_PROMPT_HISTORY = 100;
+
+/** Prompts sent, oldest first. */
+export function promptHistory(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(PROMPT_HISTORY_KEY) ?? "[]");
+    return Array.isArray(value) ? value.filter((p) => typeof p === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberPrompt(prompt: string) {
+  const list = promptHistory().filter((p) => p !== prompt);
+  list.push(prompt);
+  try {
+    localStorage.setItem(PROMPT_HISTORY_KEY, JSON.stringify(list.slice(-MAX_PROMPT_HISTORY)));
+  } catch {
+    // The history is a convenience.
+  }
+}
+
+// ---- Attachments and the queue -----------------------------------------------------------
+
+const MAX_ATTACHED_TEXT = 150_000;
+
+/** Text files attached go inline (as @ mentions do); images and other files by path, for the program to open. */
+async function attachedFiles(attachments: AiAttachment[]): Promise<{ text: string; paths: string[] }> {
+  let budget = MAX_ATTACHED_TEXT;
+  const blocks: string[] = [];
+  const paths: string[] = [];
+  for (const file of attachments) {
+    const content = file.image || budget <= 0 ? null : await fsApi.readTextFile(file.path).catch(() => null);
+    // Binary files read as text show NUL characters.
+    if (content === null || content.includes("\u0000")) {
+      paths.push(file.path);
+      continue;
+    }
+    const cut = content.slice(0, Math.min(MAX_MENTION, budget));
+    budget -= cut.length;
+    blocks.push(`\`${file.name}\`${cut.length < content.length ? " (cut)" : ""}:\n\`\`\`\n${cut}\n\`\`\``);
+  }
+  const parts = [];
+  if (blocks.length) parts.push(`Files attached:\n\n${blocks.join("\n\n")}`);
+  if (paths.length) parts.push(`Files attached (open them to see them):\n${paths.map((p) => `- ${p}`).join("\n")}`);
+  return { text: parts.join("\n\n"), paths };
+}
+
+let nextQueued = 1;
+
+const isBusy = () => {
+  const { running, turns } = useAi.getState();
+  return running !== null || turns.some((t) => !t.done);
+};
+
+/** Sends `prompt`, or queues it while an answer is in progress. */
+export function submitAiPrompt(prompt: string, attachments: AiAttachment[] = []) {
+  if (!prompt.trim() && attachments.length === 0) return;
+  rememberPrompt(prompt);
+  if (isBusy()) {
+    useAi.setState((s) => ({ queue: [...s.queue, { id: nextQueued++, prompt, attachments }] }));
+    return;
+  }
+  void sendAiPrompt(prompt, attachments);
+}
+
+export function removeQueuedPrompt(id: number) {
+  useAi.setState((s) => ({ queue: s.queue.filter((q) => q.id !== id) }));
+}
+
+/** The next queued prompt, once nothing is running. */
+function drainQueue() {
+  const { queue } = useAi.getState();
+  if (queue.length === 0 || isBusy()) return;
+  const [next, ...rest] = queue;
+  useAi.setState({ queue: rest });
+  void sendAiPrompt(next.prompt, next.attachments);
+}
+
+export async function sendAiPrompt(prompt: string, attachments: AiAttachment[] = []): Promise<void> {
   const state = useAi.getState();
-  if (state.running !== null || !prompt.trim()) return;
+  if (state.running !== null || (!prompt.trim() && attachments.length === 0)) return;
   const root = useWorkspace.getState().root;
   const { provider, model } = chatSelection();
   const id = nextTurn++;
@@ -337,7 +448,7 @@ export async function sendAiPrompt(prompt: string): Promise<void> {
   const turn: AiTurn = {
     id,
     prompt,
-    context: context?.label ?? null,
+    context: [context?.label, ...attachments.map((a) => a.name)].filter(Boolean).join(", ") || null,
     provider: provider?.name ?? "AI",
     providerId: provider?.id ?? null,
     agent: state.agent,
@@ -346,18 +457,22 @@ export async function sendAiPrompt(prompt: string): Promise<void> {
     error: null,
   };
   useAi.setState((s) => ({ turns: [...s.turns, turn] }));
-  const fail = (error: string) => updateTurn(id, (t) => ({ ...t, done: true, error }));
+  const fail = (error: string) => {
+    updateTurn(id, (t) => ({ ...t, done: true, error }));
+    drainQueue();
+  };
   if (!root) return fail("Open a folder first: the assistant works in the project's folder.");
-  if (!provider) return fail("No AI assistant was found. Install Claude Code, Codex or OpenCode, or set its path in Settings › AI.");
+  if (!provider) return fail("No AI assistant was found. Install Claude Code, Codex, OpenCode or Antigravity, or set its path in Settings › AI.");
 
   const session = state.sessions[provider.id] ?? { id: null, seen: 0 };
   const files = await mentionedFiles(root, prompt);
   if (files.labels.length) updateTurn(id, (t) => ({ ...t, context: [t.context, ...files.labels].filter(Boolean).join(", ") }));
-  const full = [transcript(state.turns.slice(session.seen, index)), context?.text, files.text, prompt].filter(Boolean).join("\n\n");
+  const attached = await attachedFiles(attachments);
+  const full = [transcript(state.turns.slice(session.seen, index)), context?.text, files.text, attached.text, prompt].filter(Boolean).join("\n\n");
   let sessionId = session.id;
   try {
     const run = await aiApi.run(
-      { provider: provider.id, path: provider.path, model: model || null, prompt: full, cwd: root, agent: state.agent, session: session.id, oneShot: false },
+      { provider: provider.id, path: provider.path, model: model || null, prompt: full, cwd: root, agent: state.agent, session: session.id, oneShot: false, attachments: attached.paths },
       (event) => {
         switch (event.kind) {
           case "session":
@@ -374,7 +489,17 @@ export async function sendAiPrompt(prompt: string): Promise<void> {
             });
             break;
           case "tool":
-            updateTurn(id, (t) => ({ ...t, parts: [...t.parts, { kind: "tool", title: event.title, detail: event.detail }] }));
+            updateTurn(id, (t) => ({ ...t, parts: [...t.parts, { kind: "tool", id: event.id, title: event.title, detail: event.detail, input: event.input }] }));
+            break;
+          case "toolOutput":
+            updateTurn(id, (t) => {
+              // The latest call with that id.
+              const at = t.parts.map((p) => p.kind === "tool" && p.id === event.id).lastIndexOf(true);
+              if (at < 0) return t;
+              const parts = [...t.parts];
+              parts[at] = { ...(parts[at] as Extract<AiPart, { kind: "tool" }>), output: event.output, error: event.error };
+              return { ...t, parts };
+            });
             break;
           case "notice":
             updateTurn(id, (t) => ({ ...t, parts: [...t.parts, { kind: "notice", text: event.text }] }));
@@ -392,6 +517,7 @@ export async function sendAiPrompt(prompt: string): Promise<void> {
               sessions: s.turns.some((t) => t.id === id) && sessionId ? { ...s.sessions, [provider.id]: { id: sessionId, seen: index + 1 } } : s.sessions,
             }));
             if (useAi.getState().turns.some((t) => t.id === id)) void persistConversation(root);
+            drainQueue();
             break;
         }
       },
@@ -410,7 +536,7 @@ export function stopAi() {
 
 export function newAiChat() {
   stopAi();
-  useAi.setState({ turns: [], sessions: {}, usage: {}, running: null, conversationId: null });
+  useAi.setState({ turns: [], sessions: {}, usage: {}, running: null, conversationId: null, queue: [] });
 }
 
 // ---- History ----------------------------------------------------------------------------
@@ -544,14 +670,14 @@ export function cleanCommitMessage(text: string): string {
 export async function generateCommitMessage(root: string, signal?: { cancel?: () => void }): Promise<string> {
   await detectAiProviders();
   const { provider, model } = commitSelection();
-  if (!provider) throw new Error("No AI assistant was found. Install Claude Code, Codex or OpenCode, or set its path in Settings › AI.");
+  if (!provider) throw new Error("No AI assistant was found. Install Claude Code, Codex, OpenCode or Antigravity, or set its path in Settings › AI.");
   const context = await gitApi.commitContext(root);
   if (!context.diff.trim() && context.untracked.length === 0) throw new Error("There are no changes to describe.");
   return new Promise<string>((resolve, reject) => {
     let text = "";
     aiApi
       .run(
-        { provider: provider.id, path: provider.path, model: model || null, prompt: commitPrompt(context), cwd: root, agent: false, session: null, oneShot: true },
+        { provider: provider.id, path: provider.path, model: model || null, prompt: commitPrompt(context), cwd: root, agent: false, session: null, oneShot: true, attachments: [] },
         (event) => {
           if (event.kind === "text") text += (event.start && text ? "\n\n" : "") + event.text;
           if (event.kind === "done") {

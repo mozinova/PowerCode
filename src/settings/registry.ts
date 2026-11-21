@@ -236,7 +236,7 @@ export const BUILTIN_SECTIONS: SettingsSection[] = [
         key: "ai.provider",
         group: "AI",
         title: "Assistant",
-        description: "The AI assistant the AI tool window uses, among those found on this computer: Claude Code, Codex or OpenCode (their command-line programs).",
+        description: "The AI assistant the AI tool window uses, among those found on this computer: Claude Code, Codex, OpenCode or Antigravity (their command-line programs).",
         type: "enum",
         default: "",
         binding: {
@@ -287,6 +287,7 @@ export const BUILTIN_SECTIONS: SettingsSection[] = [
       { key: "ai.claude.path", group: "AI › Paths", title: "Claude Code", description: "Path of the claude program. Empty: found on PATH, in the usual install folders or in the Claude Code extension.", type: "string", default: "" },
       { key: "ai.codex.path", group: "AI › Paths", title: "Codex", description: "Path of the codex program. Empty: found on PATH, in the usual install folders or in the Codex extension.", type: "string", default: "" },
       { key: "ai.opencode.path", group: "AI › Paths", title: "OpenCode", description: "Path of the opencode program. Empty: found on PATH or in the usual install folders.", type: "string", default: "" },
+      { key: "ai.antigravity.path", group: "AI › Paths", title: "Antigravity", description: "Path of the agy program (Antigravity's CLI). Empty: found on PATH or where Antigravity installs it.", type: "string", default: "" },
     ],
   },
   {

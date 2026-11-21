@@ -243,6 +243,8 @@ function MonacoHost({ group }: { group: EditorGroup }) {
         wasRestored(activePath);
         shownPathRef.current = activePath;
         editor.setModel(model);
+        // The AI tool window's tool documents show what happened; nothing to edit.
+        editor.updateOptions({ readOnly: model.uri.scheme === "pcai" });
         const viewState = viewStates.get(viewKey(group.id, activePath));
         if (viewState) editor.restoreViewState(viewState);
         applyReveal(editor, group.id, activePath);

@@ -115,6 +115,7 @@ pub fn run() {
             ai::ai_models,
             ai::ai_run,
             ai::ai_cancel,
+            ai::ai_save_image,
             github_auth::github_device_start,
             github_auth::github_device_check,
             github_auth::github_user,

@@ -335,7 +335,7 @@ export interface CommitContext {
 
 // ---- AI assistants ------------------------------------------------------------------
 
-export type AiProviderId = "claude" | "codex" | "opencode";
+export type AiProviderId = "claude" | "codex" | "opencode" | "antigravity";
 
 export interface AiProvider {
   id: AiProviderId;
@@ -367,12 +367,16 @@ export interface AiRequest {
   session: string | null;
   /** A one-off answer: no tools, nothing saved. */
   oneShot: boolean;
+  /** Images and other non-text files attached, by path. */
+  attachments: string[];
 }
 
 export type AiEvent =
   | { kind: "session"; id: string }
   | { kind: "text"; text: string; start: boolean }
-  | { kind: "tool"; title: string; detail: string | null }
+  | { kind: "tool"; id: string | null; title: string; detail: string | null; input: string | null }
+  /** What the tool with `id` returned. */
+  | { kind: "toolOutput"; id: string; output: string; error: boolean }
   | { kind: "notice"; text: string }
   /** Tokens in the conversation's context, and the model's window when the program says. */
   | { kind: "usage"; used: number; window: number | null }
@@ -389,6 +393,8 @@ export const aiApi = {
     return invoke<number>("ai_run", { request, onEvent: channel });
   },
   cancel: (id: number) => invoke<void>("ai_cancel", { id }),
+  /** Saves a pasted image (base64) and returns its path, to attach it. */
+  saveImage: (data: string, extension: string) => invoke<string>("ai_save_image", { data, extension }),
 };
 
 export interface SshHost {

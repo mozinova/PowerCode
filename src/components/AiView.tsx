@@ -3,8 +3,10 @@
 //! programs. Ask mode only reads the project; Agent mode may also change files.
 //! `@` mentions project files, `/` runs commands (/model, /clear, /ask, /agent).
 
-import { AlertTriangle, ArrowUp, Check, ChevronDown, FileText, History, MessageSquarePlus, Minus, Pencil, RefreshCw, Search, Settings, Sparkles, Square, Terminal, Trash2, Wrench, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { open } from "@tauri-apps/plugin-dialog";
+import { AlertTriangle, ArrowUp, Check, ChevronDown, Copy, CornerDownLeft, FileText, History, MessageSquarePlus, Minus, Paperclip, Pencil, RefreshCw, RotateCcw, Search, Settings, Sparkles, Square, Terminal, Trash2, Wrench, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import {
   AI_COMMANDS,
   AI_PROVIDER_NAMES,
@@ -16,27 +18,33 @@ import {
   projectFiles,
   refreshAiHistory,
   runAiCommand,
-  sendAiPrompt,
+  promptHistory,
+  removeQueuedPrompt,
+  submitAiPrompt,
   setAgentMode,
   setChatChoice,
   setIncludeFile,
   stopAi,
   useAi,
   useChatSelection,
+  type AiAttachment,
   type AiCommand,
   type AiPart,
   type AiTurn,
 } from "../ai/store";
 import { openSettings } from "../actions";
-import type { AiModel, AiProvider } from "../lib/ipc";
+import { openToolDocument } from "../ai/toolDocument";
+import { aiApi, type AiModel, type AiProvider } from "../lib/ipc";
 import { basename } from "../lib/paths";
 import { remoteOf } from "../lib/remote";
 import { searchFiles, type FileMatch } from "../search/fileMatch";
+import { notify } from "../state/notifications";
 import { showTrustDialog, useTrust } from "../state/trust";
 import { useWorkspace } from "../state/workspace";
 import { AiIcon, modelIcon, providerIcon } from "./AiIcon";
 import { Markdown } from "./ChatView";
 import { FileIcon } from "./FileIcon";
+import { ContextMenu, type MenuEntry } from "./Menu";
 import { tooltipProps } from "./Tooltip";
 import { IconButton, ToolWindowHeader } from "./ui";
 
@@ -68,37 +76,61 @@ const TOOL_ICONS: Record<string, typeof Wrench> = {
   write: Pencil,
 };
 
-/** Tool calls, one plain line each across the width: what was used, and on what. */
-function Tools({ tools }: { tools: Extract<AiPart, { kind: "tool" }>[] }) {
+type ToolPart = Extract<AiPart, { kind: "tool" }>;
+
+/** How much a tool returned, at a glance. */
+function outputSize(output: string): string {
+  const lines = output.split("\n").length;
+  return lines > 1 ? `${lines} lines` : output.length > 40 ? `${output.length} chars` : output;
+}
+
+/**
+ * Tool calls, one plain line each across the width: what was used, on what, and what
+ * came out. A click opens the whole input and output in an editor tab.
+ */
+function Tools({ tools, keyPrefix }: { tools: { tool: ToolPart; index: number }[]; keyPrefix: string }) {
   return (
     <div className="flex flex-col">
-      {tools.map((tool, i) => {
+      {tools.map(({ tool, index }) => {
         const Icon = TOOL_ICONS[tool.title] ?? Wrench;
+        const done = tool.output !== undefined && tool.output !== null;
         return (
-          <div key={i} {...tooltipProps(tool.detail ? `${tool.title}: ${tool.detail}` : tool.title)} className="flex w-full min-w-0 items-center gap-1.5 py-px text-xs text-fg-muted">
-            <Icon size={12} className="shrink-0" />
+          <button
+            key={index}
+            type="button"
+            {...tooltipProps(`${tool.detail ? `${tool.title}: ${tool.detail}` : tool.title} (click to see the input and output)`)}
+            onClick={() => openToolDocument(tool, `${keyPrefix}-${index}`)}
+            className="flex w-full min-w-0 items-center gap-1.5 py-px text-left text-xs text-fg-muted hover:text-fg"
+          >
+            <Icon size={12} className={`shrink-0 ${tool.error ? "text-danger" : ""}`} />
             <span className="shrink-0">{tool.title}</span>
             {tool.detail && <span className="min-w-0 truncate font-mono text-[11px] text-fg-subtle">{tool.detail}</span>}
-          </div>
+            <span className="flex-1" />
+            {done && (
+              <span className={`max-w-[40%] shrink-0 truncate font-mono text-[10px] ${tool.error ? "text-danger" : "text-fg-subtle"}`}>
+                {tool.error ? "failed" : tool.output ? `→ ${outputSize(tool.output)}` : "→ done"}
+              </span>
+            )}
+          </button>
         );
       })}
     </div>
   );
 }
 
-/** Text, notices, and consecutive tool calls grouped into one row. */
-function Parts({ parts }: { parts: AiPart[] }) {
-  const blocks: (AiPart | Extract<AiPart, { kind: "tool" }>[])[] = [];
-  for (const part of parts) {
+/** Text, notices, and consecutive tool calls grouped together; `keyPrefix` names the turn. */
+function Parts({ parts, keyPrefix }: { parts: AiPart[]; keyPrefix: string }) {
+  const blocks: (AiPart | { tool: ToolPart; index: number }[])[] = [];
+  parts.forEach((part, index) => {
     const last = blocks[blocks.length - 1];
-    if (part.kind === "tool" && Array.isArray(last)) last.push(part);
-    else blocks.push(part.kind === "tool" ? [part] : part);
-  }
+    if (part.kind === "tool" && Array.isArray(last)) last.push({ tool: part, index });
+    else blocks.push(part.kind === "tool" ? [{ tool: part, index }] : part);
+  });
   return (
     <>
       {blocks.map((block, i) =>
         Array.isArray(block) ? (
-          <Tools key={i} tools={block} />
+          <Tools key={i} tools={block} keyPrefix={keyPrefix} />
         ) : block.kind === "text" ? (
           <Markdown key={i} text={block.text} />
         ) : block.kind === "notice" ? (
@@ -112,10 +144,12 @@ function Parts({ parts }: { parts: AiPart[] }) {
   );
 }
 
-function Turn({ turn }: { turn: AiTurn }) {
+type MessagePart = "prompt" | "answer";
+
+function Turn({ turn, onMenu }: { turn: AiTurn; onMenu: (e: ReactMouseEvent, turn: AiTurn, part: MessagePart) => void }) {
   return (
     <div className="flex flex-col gap-2 px-3 py-2">
-      <div className="flex flex-col gap-1 rounded-md bg-hover/50 px-2.5 py-1.5">
+      <div onContextMenu={(e) => onMenu(e, turn, "prompt")} className="flex flex-col gap-1 rounded-md bg-hover/50 px-2.5 py-1.5">
         <div className="whitespace-pre-wrap break-words">{turn.prompt}</div>
         {turn.context && (
           <div className="flex min-w-0 items-center gap-1 text-[11px] text-fg-subtle">
@@ -124,13 +158,13 @@ function Turn({ turn }: { turn: AiTurn }) {
           </div>
         )}
       </div>
-      <div className="flex min-w-0 flex-col gap-2">
+      <div onContextMenu={(e) => onMenu(e, turn, "answer")} className="flex min-w-0 flex-col gap-2">
         <div className="flex items-center gap-1.5 text-xs text-fg-subtle">
           {turn.providerId ? <AiIcon name={providerIcon(turn.providerId)} size={12} /> : <Sparkles size={12} />}
           {turn.provider}
           {!turn.done && <DotsSpinner size={11} />}
         </div>
-        <Parts parts={turn.parts} />
+        <Parts parts={turn.parts} keyPrefix={String(turn.id)} />
         {turn.error && <div className="whitespace-pre-wrap break-words text-xs text-danger">{turn.error}</div>}
       </div>
     </div>
@@ -140,6 +174,8 @@ function Turn({ turn }: { turn: AiTurn }) {
 /** Ask (read-only) or Agent (may edit files). */
 function ModeSwitch() {
   const agent = useAi((s) => s.agent);
+  // Antigravity's CLI has no read-only mode (see ai.rs): Ask plans and refuses commands only.
+  const antigravity = useChatSelection().provider?.id === "antigravity";
   const option = (value: boolean, label: string, title: string) => (
     <button
       type="button"
@@ -153,7 +189,13 @@ function ModeSwitch() {
   );
   return (
     <div className="flex shrink-0 rounded-md border border-input-border p-px">
-      {option(false, "Ask", "Ask: reads the project and answers, changes nothing (/ask)")}
+      {option(
+        false,
+        "Ask",
+        antigravity
+          ? "Ask: Antigravity plans and cannot run commands, but it has no read-only mode and may still write files (/ask)"
+          : "Ask: reads the project and answers, changes nothing (/ask)",
+      )}
       {option(true, "Agent", "Agent: may edit files and run commands in the project (/agent)")}
     </div>
   );
@@ -526,6 +568,47 @@ function Empty() {
   );
 }
 
+const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
+
+function answerOf(turn: AiTurn): string {
+  return turn.parts.flatMap((p) => (p.kind === "text" ? [p.text] : [])).join("\n\n").trim();
+}
+
+/** The conversation as Markdown, to copy. */
+function conversationMarkdown(turns: AiTurn[]): string {
+  return turns.map((t) => `**You:** ${t.prompt}\n\n**${t.provider}:** ${answerOf(t) || t.error || ""}`).join("\n\n---\n\n");
+}
+
+function copy(text: string) {
+  void writeText(text).catch(() => navigator.clipboard.writeText(text).catch(() => {}));
+}
+
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+/** Files attached to the next prompt: an image's preview, or the file's icon. */
+function Attachments({ items, onRemove }: { items: AiAttachment[]; onRemove: (path: string) => void }) {
+  return (
+    <>
+      {items.map((a) => (
+        <span key={a.path} {...tooltipProps(a.path)} className="flex max-w-full min-w-0 items-center gap-1 rounded bg-hover px-1.5 text-[11px] text-fg-muted">
+          {a.preview ? <img src={a.preview} alt="" className="size-4 shrink-0 rounded-sm object-cover" /> : <FileIcon name={a.name} size={12} />}
+          <span className="truncate">{a.name}</span>
+          <button type="button" aria-label={`Remove ${a.name}`} onClick={() => onRemove(a.path)} className="hover:text-fg">
+            <X size={11} />
+          </button>
+        </span>
+      ))}
+    </>
+  );
+}
+
 export function AiView() {
   const root = useWorkspace((s) => s.root);
   const trust = useTrust((s) => s.state);
@@ -542,6 +625,12 @@ export function AiView() {
   const [dismissed, setDismissed] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
   const historyCount = useAi((s) => s.history.length);
+  const queue = useAi((s) => s.queue);
+  const [attachments, setAttachments] = useState<AiAttachment[]>([]);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+  /** Up/Down through sent prompts: where in the history, and the draft to come back to. */
+  const recall = useRef<{ index: number; draft: string } | null>(null);
+  const pasted = useRef(0);
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const busy = running !== null || turns.some((t) => !t.done);
@@ -567,14 +656,72 @@ export function AiView() {
 
   const send = () => {
     const value = text.trim();
-    if (!value) return;
-    if (value.startsWith("/") && runAiCommand(value)) {
+    if (!value && attachments.length === 0) return;
+    if (value.startsWith("/") && attachments.length === 0 && runAiCommand(value)) {
       edit("", 0);
       return;
     }
-    if (busy) return;
-    void sendAiPrompt(value);
+    // While an answer is coming, it waits in the queue.
+    submitAiPrompt(value, attachments);
+    setAttachments([]);
+    recall.current = null;
     edit("", 0);
+  };
+
+  const attachFiles = async () => {
+    const picked = await open({ multiple: true, title: "Attach Files" }).catch(() => null);
+    const paths = picked ? (Array.isArray(picked) ? picked : [picked]) : [];
+    setAttachments((current) => [
+      ...current,
+      ...paths.filter((p) => !current.some((a) => a.path === p)).map((path) => ({ path, name: basename(path), image: IMAGE.test(path) })),
+    ]);
+    inputRef.current?.focus();
+  };
+
+  /** Images pasted from the clipboard are saved and attached; text pastes as usual. */
+  const onPaste = async (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    const images = [...e.clipboardData.items]
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((f): f is File => f !== null);
+    if (images.length === 0) return;
+    e.preventDefault();
+    for (const file of images) {
+      const extension = (file.type.split("/")[1] ?? "png").replace("jpeg", "jpg");
+      try {
+        const path = await aiApi.saveImage(await fileToBase64(file), extension);
+        const name = `Pasted image ${++pasted.current}.${extension}`;
+        setAttachments((current) => [...current, { path, name, image: true, preview: URL.createObjectURL(file) }]);
+      } catch (error) {
+        notify("error", "Could not attach the image", String(error));
+      }
+    }
+  };
+
+  const messageMenu = (e: ReactMouseEvent, turn: AiTurn, part: MessagePart) => {
+    e.preventDefault();
+    const selection = window.getSelection()?.toString() ?? "";
+    const items: MenuEntry[] = [];
+    if (selection.trim()) items.push({ label: "Copy Selection", icon: Copy, action: () => copy(selection) });
+    if (part === "prompt") {
+      items.push(
+        { label: "Copy Message", icon: Copy, action: () => copy(turn.prompt) },
+        {
+          label: "Edit in Input",
+          icon: CornerDownLeft,
+          action: () => {
+            edit(turn.prompt, turn.prompt.length);
+            inputRef.current?.focus();
+          },
+        },
+        { label: "Send Again", icon: RotateCcw, action: () => submitAiPrompt(turn.prompt) },
+      );
+    } else {
+      const answer = answerOf(turn);
+      items.push({ label: "Copy Answer", icon: Copy, disabled: !answer, action: () => copy(answer) });
+    }
+    items.push("separator", { label: "Copy Conversation", action: () => copy(conversationMarkdown(useAi.getState().turns)) });
+    setMenu({ x: e.clientX, y: e.clientY, items });
   };
 
   const pick = (item: Suggestion) => {
@@ -608,6 +755,26 @@ export function AiView() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       send();
+      return;
+    }
+    // As in a terminal: Up on the first line goes back through sent prompts, Down on
+    // the last line forward, past the newest back to the draft.
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+      const input = e.currentTarget;
+      const firstLine = !input.value.slice(0, input.selectionStart).includes("\n");
+      const lastLine = !input.value.slice(input.selectionEnd).includes("\n");
+      if (e.key === "ArrowUp" ? !firstLine : !lastLine || !recall.current) return;
+      const list = promptHistory();
+      if (list.length === 0) return;
+      e.preventDefault();
+      const current = recall.current ?? { index: list.length, draft: text };
+      const index = e.key === "ArrowUp" ? Math.max(0, current.index - 1) : current.index + 1;
+      const value = index >= list.length ? current.draft : list[index];
+      recall.current = index >= list.length ? null : { index, draft: current.draft };
+      edit(value, value.length);
+      // Suggestions would cover the recalled prompt.
+      setDismissed(true);
+      requestAnimationFrame(() => inputRef.current?.setSelectionRange(value.length, value.length));
     }
   };
 
@@ -669,28 +836,51 @@ export function AiView() {
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto pb-2 select-text">
           {turns.length === 0 && <Empty />}
           {turns.map((turn) => (
-            <Turn key={turn.id} turn={turn} />
+            <Turn key={turn.id} turn={turn} onMenu={messageMenu} />
           ))}
         </div>
       )}
+      {menu && <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} />}
       <div className="shrink-0 px-3 pt-1 pb-2">
+        {queue.length > 0 && (
+          <div className="mb-1.5 flex flex-col gap-0.5" aria-label="Queued messages">
+            {queue.map((q) => (
+              <div key={q.id} className="flex min-w-0 items-center gap-1.5 text-xs text-fg-muted">
+                <span className="shrink-0 rounded bg-hover px-1 text-[10px] text-fg-subtle">Queued</span>
+                <span className="min-w-0 flex-1 truncate">{q.prompt || q.attachments.map((a) => a.name).join(", ")}</span>
+                <button type="button" aria-label="Remove from the queue" {...tooltipProps("Remove from the queue")} onClick={() => removeQueuedPrompt(q.id)} className="shrink-0 hover:text-fg">
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="relative flex flex-col gap-1.5 rounded-lg border border-input-border bg-input px-2 py-1.5 focus-within:border-accent">
           {suggestions.length > 0 && (
             <SuggestionList items={suggestions} active={Math.min(active, suggestions.length - 1)} onPick={pick} onHover={setActive} />
           )}
-          {includeFile && fileName && (
-            <span className="flex w-fit max-w-full items-center gap-1 rounded bg-hover px-1.5 text-[11px] text-fg-muted" {...tooltipProps("The open file (and its selection) is sent along")}>
-              <FileIcon name={fileName} size={12} />
-              <span className="truncate">{fileName}</span>
-              <button type="button" aria-label="Don't send the open file" onClick={() => setIncludeFile(false)} className="hover:text-fg">
-                <X size={11} />
-              </button>
-            </span>
+          {((includeFile && fileName) || attachments.length > 0) && (
+            <div className="flex min-w-0 flex-wrap gap-1">
+              {includeFile && fileName && (
+                <span className="flex max-w-full min-w-0 items-center gap-1 rounded bg-hover px-1.5 text-[11px] text-fg-muted" {...tooltipProps("The open file (and its selection) is sent along")}>
+                  <FileIcon name={fileName} size={12} />
+                  <span className="truncate">{fileName}</span>
+                  <button type="button" aria-label="Don't send the open file" onClick={() => setIncludeFile(false)} className="hover:text-fg">
+                    <X size={11} />
+                  </button>
+                </span>
+              )}
+              <Attachments items={attachments} onRemove={(path) => setAttachments((current) => current.filter((a) => a.path !== path))} />
+            </div>
           )}
           <textarea
             ref={inputRef}
             value={text}
-            onChange={(e) => edit(e.target.value, e.target.selectionStart)}
+            onChange={(e) => {
+              recall.current = null;
+              edit(e.target.value, e.target.selectionStart);
+            }}
+            onPaste={(e) => void onPaste(e)}
             onSelect={(e) => setCaret(e.currentTarget.selectionStart)}
             onKeyDown={onKeyDown}
             disabled={providers.length === 0}
@@ -702,22 +892,25 @@ export function AiView() {
             <ModeSwitch />
             <ModelPicker />
             <ContextRing />
+            <button type="button" aria-label="Attach files" {...tooltipProps("Attach files (or paste an image)")} onClick={() => void attachFiles()} className="flex size-6 shrink-0 items-center justify-center rounded text-fg-subtle hover:bg-hover hover:text-fg">
+              <Paperclip size={13} />
+            </button>
             {!includeFile && (
               <button type="button" onClick={() => setIncludeFile(true)} {...tooltipProps("Send the open file (and its selection) along")} className="flex shrink-0 items-center gap-1 rounded px-1 text-xs text-fg-subtle hover:text-fg">
                 <FileText size={12} /> File
               </button>
             )}
             <span className="flex-1" />
-            {busy ? (
+            {busy && empty && attachments.length === 0 ? (
               <button type="button" aria-label="Stop" {...tooltipProps("Stop")} onClick={stopAi} className="flex size-6 shrink-0 items-center justify-center rounded-full bg-fg text-panel hover:opacity-90">
                 <Square size={10} fill="currentColor" />
               </button>
             ) : (
               <button
                 type="button"
-                aria-label="Send"
-                {...tooltipProps("Send (Enter)")}
-                disabled={empty}
+                aria-label={busy ? "Queue" : "Send"}
+                {...tooltipProps(busy ? "Queue: sent when the answer is done (Enter)" : "Send (Enter)")}
+                disabled={empty && attachments.length === 0}
                 onClick={send}
                 className="flex size-6 shrink-0 items-center justify-center rounded-full bg-accent text-white hover:bg-accent-hover disabled:bg-hover disabled:text-fg-subtle"
               >

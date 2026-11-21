@@ -43,7 +43,7 @@ is the least tested. Package manager: **bun**.
 | `src/state/` | zustand stores: `workspace` (groups, tabs, tools), `trust`, `session`, `recentProjects`, `settings`, ... |
 | `src/extensions/` | Installing extensions and their declarative parts (themes, grammars, snippets, icon themes). |
 | `src/git`, `src/terminal`, `src/debug`, `src/search`, `src/settings` | Built-in features. |
-| `src/ai` | AI tool window and commit messages through the installed Claude Code / Codex / OpenCode programs (`src-tauri/src/ai.rs` finds and runs them). |
+| `src/ai` | AI tool window and commit messages through the installed Claude Code / Codex / OpenCode / Antigravity (`agy`) programs (`src-tauri/src/ai.rs` finds and runs them). |
 | `ext-host/src/` | The extension host (Node). `api.ts` builds the `vscode` module; `types.ts` holds API classes; one module per area (`views`, `providers`, `debug`, `tasks`, `scm`, `testing`, `comments`, `chat`, `lm`, `authentication`, `virtual`, `tabs`, `terminals`, `files`, ...). |
 | `ext-host/src/surface.ts` | Generated from `@types/vscode` (`bun run gen:vscode-surface`): every API member, so missing ones are filled with inert stand-ins and extensions still activate. |
 | `ext-host/test/` | TypeScript tests (`bun run test`). |
